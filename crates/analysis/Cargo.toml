@@ -1,0 +1,16 @@
+[package]
+name = "switchyard-analysis"
+description = "Metrics, incident detection, resilience scoring and counterfactual root-cause analysis for Switchyard."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+switchyard-core.workspace = true
+switchyard-trace.workspace = true
+
+[lints]
+workspace = true
