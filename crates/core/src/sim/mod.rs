@@ -16,17 +16,18 @@
 //!    delivered, a full bag starts a swap).
 //! 4. Assign work: each station, in id order, hands its oldest unclaimed
 //!    parcels to the nearest idle robots (by guided distance, ties by id),
-//!    up to [`MAX_INBOUND_PER_STATION`]. Idle robots left without work head
+//!    up to `fleet.max_inbound_per_station`. Idle robots left without work head
 //!    for the parking lane (throttling, see below).
 //! 5. Plan moves with the [`Planner`] (guided PIBT by default).
 //! 6. Apply moves; carried parcels switch between `Travelling` and
 //!    `Blocked`.
 //! 7. Resolve arrivals at goals: start loads, and start drops at chutes that
 //!    can take a parcel.
-//! 8. Attribute waits: every robot with work (heading to a station or a
-//!    chute) that did not get closer to its goal gets a `RobotWaited` with
-//!    its direct cause (CP1 sets `root = direct`; CP2 walks the wait-for
-//!    graph). Idle robots driving to parking are not recorded.
+//! 8. Attribute waits: every robot's direct cause goes into the tick's
+//!    wait-for record ([`Sim::wait_for`]); robots with work (heading to a
+//!    station or a chute) also get a `RobotWaited` (CP1 sets
+//!    `root = direct`; CP2 walks the wait-for graph), and a `RobotStalled`
+//!    when they have waited `planner.watchdog_ticks` ticks in a row.
 //! 9. Watchdog: if robots have work but none has progressed for
 //!    `planner.watchdog_ticks`, emit `Stalled`.
 //! 10. Advance the tick. The state hash is computed on demand from the
@@ -35,7 +36,8 @@
 //! # Throttling
 //! Admission control is twofold, both deliberately simple (ADR 0003;
 //! research §1 "agent disabling"): a station accepts at most
-//! [`MAX_INBOUND_PER_STATION`] robots, which caps how many robots crowd the
+//! `fleet.max_inbound_per_station` robots (see its docs for the sizing),
+//! which caps how many robots crowd the
 //! induction area; and every idle robot that phase 4 could not give work to
 //! is surplus to the floor's current demand, so instead of loitering in the
 //! sort field (where PIBT would keep pushing it around) it drives to the
@@ -44,29 +46,23 @@
 
 use std::collections::VecDeque;
 
+mod mapping;
+mod snapshot;
+mod state_hash;
+
+pub use snapshot::Snapshot;
+
 use crate::arrivals::{PoissonTable, ZipfTable};
-use crate::config::{ChuteMapping, ConfigError, ScenarioConfig};
+use crate::config::{ConfigError, ScenarioConfig};
 use crate::events::{ChuteState, Event, WaitCause};
 use crate::guidance::DistanceTables;
-use crate::hash::Fnv1a;
 use crate::ids::{ChuteId, DestinationId, ParcelId, RobotId, StationId};
 use crate::layout::{self, Layout};
 use crate::pibt::PibtPlanner;
 use crate::planner::{PlanInput, PlanOutput, Planner};
 use crate::rng::{Stream, StreamId};
-use crate::world::{Goal, Phase, RobotState, World};
+use crate::world::{Goal, Phase, RobotState, Robots, Stations, World};
 use crate::{TICKS_PER_HOUR, Tick};
-
-/// Robots that may be heading to (or loading at) one station at once.
-///
-/// The station's throughput is at most `inbound / (trip + load)` parcels per
-/// tick, and a robot's trip to the station is 30-60 ticks on the medium and
-/// large floors, so keeping a station busy at 800 parcels/h needs about five
-/// robots in its pipeline (Little's law). With 2 (the V0 value) medium
-/// delivered 20 parcels/h per robot with a growing backlog; 6 keeps every
-/// preset level with demand while capping the crowd around the induction
-/// cell (measured: 4 left a backlog on `large`, 8 gained nothing).
-pub const MAX_INBOUND_PER_STATION: u16 = 6;
 
 /// Aggregate counters of a run.
 ///
@@ -100,22 +96,6 @@ impl Stats {
     }
 }
 
-/// A flat, allocation-reusing view of the sim for the viewer (ARCHITECTURE
-/// §8). The buffers map directly onto typed arrays in the WASM facade.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Snapshot {
-    /// The tick this snapshot was taken at.
-    pub tick: Tick,
-    /// Interleaved robot coordinates: `[x0, y0, x1, y1, ...]`.
-    pub robot_xy: Vec<u16>,
-    /// Robot states as [`RobotState`] `u8` codes, one per robot.
-    pub robot_state: Vec<u8>,
-    /// Parcels in each chute's bag, saturated at `u16::MAX`.
-    pub chute_fill: Vec<u16>,
-    /// Parcels waiting at each station, saturated at `u16::MAX`.
-    pub station_queue: Vec<u16>,
-}
-
 /// A running simulation.
 #[derive(Debug)]
 pub struct Sim {
@@ -124,11 +104,17 @@ pub struct Sim {
     distances: DistanceTables,
     world: World,
     tick: Tick,
+    /// Current arrival rate of each station, per hour (changed by
+    /// [`Sim::set_arrival_rate`]), and its sampling table.
+    arrival_rates: Vec<u32>,
     arrival_tables: Vec<PoissonTable>,
     arrival_streams: Vec<Stream>,
     zipf: ZipfTable,
     destination_streams: Vec<Stream>,
     scanner_streams: Vec<Stream>,
+    /// Current scanner misread rate (changed by
+    /// [`Sim::set_scanner_error_rate`]).
+    scanner_ppm: u32,
     planner: Box<dyn Planner>,
     // Counters, kept incrementally (Stats checks them against the world).
     arrived: u64,
@@ -203,7 +189,7 @@ impl Sim {
             .arrivals
             .destinations
             .unwrap_or_else(|| u16::try_from(chutes).unwrap_or(u16::MAX));
-        world.destination_chute = map_destinations(
+        world.destination_chute = mapping::map_destinations(
             usize::from(destinations),
             config.chutes.mapping,
             &layout,
@@ -214,6 +200,7 @@ impl Sim {
         world.stations.cell.clone_from(&layout.stations);
         world.stations.queue = vec![VecDeque::new(); stations];
         world.stations.inbound = vec![0; stations];
+        world.stations.arrived = vec![0; stations];
 
         let station_ids = 0..u16::try_from(stations).unwrap_or(u16::MAX);
         let streams = |id: fn(u16) -> StreamId| {
@@ -230,11 +217,13 @@ impl Sim {
             distances,
             world,
             tick: 0,
+            arrival_rates: vec![rate; stations],
             arrival_tables: vec![PoissonTable::new(rate); stations],
             arrival_streams: streams(StreamId::arrivals),
             zipf: ZipfTable::new(destinations, config.arrivals.zipf_s_milli),
             destination_streams: streams(StreamId::destinations),
             scanner_streams: streams(StreamId::scanner),
+            scanner_ppm: config.scanner.error_rate_ppm,
             planner,
             arrived: 0,
             delivered: 0,
@@ -284,7 +273,9 @@ impl Sim {
 
     /// The direct wait cause of every robot in the last simulated tick
     /// (`None` for robots that progressed or had nothing to do). These are
-    /// the tick's wait-for edges; they match its `RobotWaited` events.
+    /// the tick's complete wait-for edges, idle and parking robots included,
+    /// so every chain can be walked to its end; the tick's `RobotWaited`
+    /// events are the subset for robots with work.
     #[must_use]
     pub fn wait_for(&self) -> &[Option<WaitCause>] {
         &self.waits
@@ -296,10 +287,49 @@ impl Sim {
     /// unaffected (ADR 0002 §3). This is the hook for induction outages and
     /// volume surges (CP2).
     ///
-    /// # Panics
-    /// If `station` does not exist.
-    pub fn set_arrival_rate(&mut self, station: StationId, per_hour: u32) {
-        self.arrival_tables[station.index()] = PoissonTable::new(per_hour.min(TICKS_PER_HOUR));
+    /// # Errors
+    /// [`ConfigError::OutOfRange`] if `station` does not exist, or
+    /// [`ConfigError::ArrivalRateTooHigh`] above one parcel per tick; the
+    /// sim is unchanged.
+    pub fn set_arrival_rate(
+        &mut self,
+        station: StationId,
+        per_hour: u32,
+    ) -> Result<(), ConfigError> {
+        let stations = self.arrival_rates.len();
+        if station.index() >= stations {
+            return Err(ConfigError::OutOfRange {
+                field: "station",
+                value: u64::from(station.0),
+                min: 0,
+                max: stations.saturating_sub(1) as u64,
+            });
+        }
+        if per_hour > TICKS_PER_HOUR {
+            return Err(ConfigError::ArrivalRateTooHigh { per_hour });
+        }
+        self.arrival_rates[station.index()] = per_hour;
+        self.arrival_tables[station.index()] = PoissonTable::new(per_hour);
+        Ok(())
+    }
+
+    /// Change the scanner misread rate from the next scan on (the hook for
+    /// scanner-drift faults, CP2). Each parcel's scan draws are keyed on the
+    /// parcel, so the change affects only the parcels scanned while it holds.
+    ///
+    /// # Errors
+    /// [`ConfigError::OutOfRange`] above 1,000,000 ppm; the sim is unchanged.
+    pub fn set_scanner_error_rate(&mut self, ppm: u32) -> Result<(), ConfigError> {
+        if ppm > 1_000_000 {
+            return Err(ConfigError::OutOfRange {
+                field: "scanner.error_rate_ppm",
+                value: u64::from(ppm),
+                min: 0,
+                max: 1_000_000,
+            });
+        }
+        self.scanner_ppm = ppm;
+        Ok(())
     }
 
     /// Advance one tick, appending the tick's events to `out` (which is not
@@ -315,37 +345,6 @@ impl Sim {
         self.attribute_waits(t, out);
         self.watchdog(t, out);
         self.tick = t + 1;
-    }
-
-    /// Fill `snap` with the current state, reusing its buffers.
-    pub fn snapshot(&self, snap: &mut Snapshot) {
-        let g = &self.layout.grid;
-        snap.tick = self.tick;
-        snap.robot_xy.clear();
-        for &c in &self.world.robots.pos {
-            let p = g.pos(c);
-            snap.robot_xy.push(p.x);
-            snap.robot_xy.push(p.y);
-        }
-        snap.robot_state.clear();
-        snap.robot_state
-            .extend(self.world.robots.state.iter().map(|&s| s as u8));
-        snap.chute_fill.clear();
-        snap.chute_fill.extend(
-            self.world
-                .chutes
-                .fill
-                .iter()
-                .map(|&f| u16::try_from(f).unwrap_or(u16::MAX)),
-        );
-        snap.station_queue.clear();
-        snap.station_queue.extend(
-            self.world
-                .stations
-                .queue
-                .iter()
-                .map(|q| u16::try_from(q.len()).unwrap_or(u16::MAX)),
-        );
     }
 
     /// Aggregate counters. `queued` and `in_flight` are counted from the
@@ -383,107 +382,28 @@ impl Sim {
         }
     }
 
-    /// FNV-1a hash of a canonical encoding of the complete sim state: tick,
-    /// every entity column in id order, counters and the position of every
-    /// random stream (ADR 0002 §5). Equal hashes across platforms and between
-    /// native and WASM are the determinism check.
-    #[must_use]
-    pub fn state_hash(&self) -> u64 {
-        let mut h = Fnv1a::new();
-        h.write(b"switchyard-state-v1");
-        h.write_u32(self.tick);
-        h.write_u64(self.arrived);
-        h.write_u64(self.delivered);
-        h.write_u64(self.mis_sorted);
-        h.write_u32(self.last_progress);
-        h.write_u32(self.last_stall);
-
-        let r = &self.world.robots;
-        h.write_u64(r.len() as u64);
-        for i in 0..r.len() {
-            h.write_u32(r.pos[i]);
-            h.write_u8(r.state[i] as u8);
-            h.write_opt_u32(r.parcel[i].map(|p| p.0));
-            match r.goal[i] {
-                None => h.write_u8(0),
-                Some(Goal::Station(s)) => {
-                    h.write_u8(1);
-                    h.write_u16(s.0);
-                }
-                Some(Goal::Chute(c)) => {
-                    h.write_u8(2);
-                    h.write_u16(c.0);
-                }
-                Some(Goal::Park) => h.write_u8(3),
-            }
-            h.write_u16(r.timer[i]);
-            h.write_u16(r.waited[i]);
-            h.write_u32(r.goal_since[i]);
-        }
-
-        let p = &self.world.parcels;
-        h.write_u64(p.len() as u64);
-        for i in 0..p.len() {
-            h.write_u16(p.station[i].0);
-            h.write_u16(p.destination[i].0);
-            h.write_u32(p.arrived[i]);
-            h.write_u8(p.phase[i] as u8);
-            h.write_u32(p.phase_since[i]);
-            h.write_opt_u32(p.robot[i].map(|r| r.0));
-            h.write_opt_u32(p.target[i].map(|c| u32::from(c.0)));
-            h.write_opt_u32(p.chute[i].map(|c| u32::from(c.0)));
-        }
-
-        let s = &self.world.stations;
-        for i in 0..s.cell.len() {
-            h.write_u32(s.cell[i]);
-            h.write_u16(s.inbound[i]);
-            h.write_u64(s.queue[i].len() as u64);
-            for q in &s.queue[i] {
-                h.write_u32(q.0);
-            }
-        }
-
-        let c = &self.world.chutes;
-        for i in 0..c.cell.len() {
-            h.write_u32(c.cell[i]);
-            h.write_u32(c.fill[i]);
-            h.write_u8(c.state[i] as u8);
-            h.write_u32(c.timer[i]);
-            h.write_u16(c.incoming[i]);
-        }
-        h.write_u64(self.world.destination_chute.len() as u64);
-        for d in &self.world.destination_chute {
-            h.write_u16(d.0);
-        }
-
-        for st in self
-            .arrival_streams
-            .iter()
-            .chain(&self.destination_streams)
-            .chain(&self.scanner_streams)
-        {
-            h.write_u128(st.word_pos());
-        }
-        self.planner.hash_state(&mut h);
-        h.finish()
-    }
-
     // ---- tick phases -----------------------------------------------------
 
     /// Phase 2: a Poisson count per station, then one Zipf destination per
     /// parcel, all from that station's own streams so stations never perturb
-    /// each other. Exactly one arrival draw per station per tick keeps each
-    /// stream's position a function of the tick alone.
+    /// each other. Exactly one arrival draw per station per tick keeps the
+    /// arrival stream's position a function of the tick alone, and each
+    /// destination is keyed on the parcel's ordinal at its station.
     fn generate_arrivals(&mut self, t: Tick, out: &mut Vec<Event>) {
         for s in 0..self.world.stations.cell.len() {
             let count = self.arrival_tables[s].sample(&mut self.arrival_streams[s]);
             for _ in 0..count {
-                let destination = DestinationId(self.zipf.sample(&mut self.destination_streams[s]));
+                let ordinal = self.world.stations.arrived[s];
+                self.world.stations.arrived[s] += 1;
+                let destination = DestinationId(
+                    self.zipf
+                        .sample_keyed(&mut self.destination_streams[s], u64::from(ordinal)),
+                );
                 let station = station_id(s);
                 let parcel = ParcelId(u32::try_from(self.world.parcels.len()).unwrap_or(u32::MAX));
                 let p = &mut self.world.parcels;
                 p.station.push(station);
+                p.ordinal.push(ordinal);
                 p.destination.push(destination);
                 p.arrived.push(t);
                 p.phase.push(Phase::Queued);
@@ -557,27 +477,32 @@ impl Sim {
     fn finish_loading(&mut self, t: Tick, r: usize, parcel: ParcelId, out: &mut Vec<Event>) {
         let station = self.world.parcels.station[parcel.index()];
         self.world.stations.inbound[station.index()] -= 1;
-        let chute = self.scan(station, self.world.parcels.destination[parcel.index()]);
+        let chute = self.scan(parcel);
         self.world.parcels.target[parcel.index()] = Some(chute);
         self.world.robots.goal[r] = Some(Goal::Chute(chute));
         self.world.robots.goal_since[r] = t;
         self.set_robot_state(t, r, RobotState::ToChute, out);
     }
 
-    /// The scanner at `station` reads a parcel for `destination`: usually
-    /// the destination's chute, but with probability `error_rate_ppm` a
-    /// uniformly chosen other chute. One draw per scan regardless of the
-    /// rate, so changing the rate (a scanner-drift fault) does not shift the
-    /// stream for later parcels that are read correctly.
-    fn scan(&mut self, station: StationId, destination: DestinationId) -> ChuteId {
-        let correct = self.world.destination_chute[destination.index()];
-        let stream = &mut self.scanner_streams[station.index()];
-        let misread = stream.below(1_000_000) < u64::from(self.config.scanner.error_rate_ppm);
+    /// The scanner at the parcel's station reads it: usually the chute of
+    /// its destination, but with probability `scanner_ppm` a uniformly chosen
+    /// other chute. Both draws (misread? which chute?) are keyed on the
+    /// parcel's ordinal at its station and always taken, so a parcel's scan
+    /// outcome depends only on the parcel and the rate in force when it is
+    /// scanned: a scanner-drift fault changes the parcels scanned during it
+    /// and no others.
+    fn scan(&mut self, parcel: ParcelId) -> ChuteId {
+        let i = parcel.index();
+        let p = &self.world.parcels;
+        let correct = self.world.destination_chute[p.destination[i].index()];
+        let key = u64::from(p.ordinal[i]) * 2;
+        let stream = &mut self.scanner_streams[p.station[i].index()];
         let chutes = self.world.chutes.cell.len() as u64;
-        if !misread || chutes < 2 {
+        let roll = stream.keyed_below(key, 1_000_000);
+        let offset = 1 + stream.keyed_below(key + 1, chutes.saturating_sub(1).max(1));
+        if roll >= u64::from(self.scanner_ppm) || chutes < 2 {
             return correct;
         }
-        let offset = 1 + stream.below(chutes - 1);
         chute_id(usize::try_from((u64::from(correct.0) + offset) % chutes).unwrap_or(0))
     }
 
@@ -639,7 +564,7 @@ impl Sim {
 
         for s in 0..self.world.stations.cell.len() {
             let station = station_id(s);
-            while self.world.stations.inbound[s] < MAX_INBOUND_PER_STATION {
+            while self.world.stations.inbound[s] < self.config.fleet.max_inbound_per_station {
                 let Some(&parcel) = self.world.stations.queue[s]
                     .iter()
                     .find(|p| self.world.parcels.robot[p.index()].is_none())
@@ -705,15 +630,21 @@ impl Sim {
             let at_chute = state == RobotState::ToChute
                 && goal.is_some_and(|g| self.distances.get(g, robots.pos[r]) == 0);
             self.at_chute[r] = at_chute;
-            let movable = !at_chute
-                && matches!(
-                    state,
-                    RobotState::Idle | RobotState::ToInduction | RobotState::ToChute
-                );
+            // Robots waiting at a chute that cannot take their parcel stay
+            // movable, with the lowest priority: through traffic can push
+            // them aside and they come back, instead of their queue turning
+            // into a wall across the aisle.
+            let movable = matches!(
+                state,
+                RobotState::Idle | RobotState::ToInduction | RobotState::ToChute
+            );
             self.plan_movable.push(movable);
             self.plan_goal.push(if movable { goal } else { None });
-            self.plan_priority
-                .push(t.saturating_sub(robots.goal_since[r]));
+            self.plan_priority.push(if at_chute {
+                0
+            } else {
+                t.saturating_sub(robots.goal_since[r])
+            });
         }
         let input = PlanInput {
             layout: &self.layout,
@@ -742,9 +673,13 @@ impl Sim {
             if self.world.robots.state[r] == RobotState::ToChute
                 && d_to != 0
                 && let Some(parcel) = self.world.robots.parcel[r]
+                && self.world.parcels.phase[parcel.index()] != Phase::ChuteWait
             {
                 // Arrivals (d_to == 0) are left to phase 7, which moves the
                 // parcel to `ChuteWait` without an empty `Travelling` span.
+                // A parcel already in `ChuteWait` stays there while its
+                // robot is pushed aside and returns: it is still waiting for
+                // the chute.
                 let phase = if self.plan_out.cause[r].is_some() {
                     Phase::Blocked
                 } else {
@@ -800,23 +735,20 @@ impl Sim {
     fn attribute_waits(&mut self, t: Tick, out: &mut Vec<Event>) {
         for r in 0..self.world.robots.len() {
             let goal = self.world.robots.goal[r];
-            let cause = match (goal, self.plan_out.cause[r]) {
-                (Some(Goal::Chute(c)), _)
-                    if self.at_chute[r] && self.world.robots.state[r] == RobotState::ToChute =>
-                {
-                    Some(WaitCause::ChuteUnavailable(c))
-                }
-                (Some(Goal::Station(s)), Some(WaitCause::BlockedBy(b)))
-                    if self.world.robots.pos[b.index()] == self.world.stations.cell[s.index()] =>
-                {
-                    Some(WaitCause::StationBusy(s))
-                }
-                // Robots driving to parking have no parcel and delay nothing:
-                // their waits are not recorded. A robot with work blocked by
-                // one still records `BlockedBy(it)`, so the chain ends there.
-                (Some(Goal::Park) | None, _) => None,
-                (_, cause) => cause,
-            };
+            // Still at its chute (not pushed aside this tick) and unable to drop.
+            let waiting = self.at_chute[r]
+                && self.world.robots.state[r] == RobotState::ToChute
+                && self.plan_out.next[r] == self.world.robots.pos[r]
+                && goal.is_some_and(|g| self.distances.get(g, self.world.robots.pos[r]) == 0);
+            let cause = refine_cause(
+                goal,
+                self.plan_out.cause[r],
+                waiting,
+                &self.world.robots,
+                &self.world.stations,
+            );
+            // Every robot's edge is kept, so chains can be walked through
+            // idle and parked robots (`wait_for`).
             self.waits[r] = cause;
             let waited = &mut self.world.robots.waited[r];
             let Some(direct) = cause else {
@@ -824,6 +756,19 @@ impl Sim {
                 continue;
             };
             *waited = waited.saturating_add(1);
+            let waited = *waited;
+            // Events only for robots with work: idle and parking robots carry
+            // no parcel and delay nothing on their own.
+            if !matches!(goal, Some(Goal::Station(_) | Goal::Chute(_))) {
+                continue;
+            }
+            if waited == self.config.planner.watchdog_ticks {
+                out.push(Event::RobotStalled {
+                    tick: t,
+                    robot: robot_id(r),
+                    waited,
+                });
+            }
             out.push(Event::RobotWaited {
                 tick: t,
                 robot: robot_id(r),
@@ -899,29 +844,29 @@ impl Sim {
     }
 }
 
-/// The chute for each of `n` destinations under `mapping`. Destination ids
-/// are popularity ranks (Zipf weight falls with the id), so "most popular"
-/// means "lowest id".
-fn map_destinations(
-    n: usize,
-    mapping: ChuteMapping,
-    layout: &Layout,
-    distances: &DistanceTables,
-) -> Vec<ChuteId> {
-    let chutes = layout.chutes.len();
-    let mut order: Vec<ChuteId> = (0..chutes).map(chute_id).collect();
-    if mapping == ChuteMapping::PopularityNearInduction {
-        // Sum of guided distances from every induction cell; ties by id.
-        order.sort_by_key(|&c| {
-            let total: u64 = layout
-                .stations
-                .iter()
-                .map(|&s| u64::from(distances.get(Goal::Chute(c), s)))
-                .sum();
-            (total, c)
-        });
+/// Refine a planner's robot-to-robot cause with what only the sim knows
+/// (ARCHITECTURE §4): a robot waiting at a chute that cannot take its parcel
+/// waits on the chute; a robot blocked by the robot *loading* on its target
+/// station's cell waits on the station. A robot stuck on that cell after
+/// loading is just another robot: the edge stays `BlockedBy`, so the walk
+/// continues to whatever blocks it.
+fn refine_cause(
+    goal: Option<Goal>,
+    planner: Option<WaitCause>,
+    waiting_at_chute: bool,
+    robots: &Robots,
+    stations: &Stations,
+) -> Option<WaitCause> {
+    match (goal, planner) {
+        (Some(Goal::Chute(c)), _) if waiting_at_chute => Some(WaitCause::ChuteUnavailable(c)),
+        (Some(Goal::Station(s)), Some(WaitCause::BlockedBy(b)))
+            if robots.pos[b.index()] == stations.cell[s.index()]
+                && robots.state[b.index()] == RobotState::Loading =>
+        {
+            Some(WaitCause::StationBusy(s))
+        }
+        (_, cause) => cause,
     }
-    (0..n).map(|d| order[d % chutes]).collect()
 }
 
 fn robot_id(r: usize) -> RobotId {
@@ -975,5 +920,58 @@ fn check_plan(layout: &Layout, pos: &[crate::grid::CellIdx], next: &[crate::grid
                 "robots {r} and {other} swapped cells"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Robot 1 stands on station 0's cell (cell 7); robot 0 heads there.
+    fn floor(blocker: RobotState) -> (Robots, Stations) {
+        let robots = Robots {
+            pos: vec![8, 7],
+            state: vec![RobotState::ToInduction, blocker],
+            ..Robots::default()
+        };
+        let stations = Stations {
+            cell: vec![7],
+            ..Stations::default()
+        };
+        (robots, stations)
+    }
+
+    #[test]
+    fn station_busy_only_while_the_blocker_is_loading() {
+        let goal = Some(Goal::Station(StationId(0)));
+        let blocked = Some(WaitCause::BlockedBy(RobotId(1)));
+        let (robots, stations) = floor(RobotState::Loading);
+        assert_eq!(
+            refine_cause(goal, blocked, false, &robots, &stations),
+            Some(WaitCause::StationBusy(StationId(0)))
+        );
+        // Loaded and itself stuck on the station cell: the real blocker is
+        // further down the chain, so keep the robot edge.
+        let (robots, stations) = floor(RobotState::ToChute);
+        assert_eq!(
+            refine_cause(goal, blocked, false, &robots, &stations),
+            blocked
+        );
+    }
+
+    #[test]
+    fn waiting_at_an_unavailable_chute_is_chute_unavailable() {
+        let (robots, stations) = floor(RobotState::Loading);
+        let goal = Some(Goal::Chute(ChuteId(3)));
+        assert_eq!(
+            refine_cause(goal, None, true, &robots, &stations),
+            Some(WaitCause::ChuteUnavailable(ChuteId(3)))
+        );
+        // Pushed off the chute while waiting: the robot edge is the cause.
+        let yielded = Some(WaitCause::Yielded(RobotId(1)));
+        assert_eq!(
+            refine_cause(goal, yielded, false, &robots, &stations),
+            yielded
+        );
     }
 }

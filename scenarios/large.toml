@@ -22,6 +22,8 @@ south_margin = 6
 
 [fleet]
 robots = 500
+# Robots that may head to (or load at) one station at once.
+max_inbound_per_station = 6
 
 [arrivals]
 # 20 stations x 800/h = 16,000 parcels/h offered (32 per robot per hour).

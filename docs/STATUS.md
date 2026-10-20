@@ -1,17 +1,17 @@
 # Switchyard: status
 
-**Updated:** 2026-10-19 · **Phase:** Discovery done → V0 in progress
+**Updated:** 2026-10-20 · **Phase:** CP1 done (gates passed) → CP2 next
 
 ## Now
-- Discovery complete: four research briefs, `PRODUCT.md`, `ARCHITECTURE.md`, ADRs 0001–0005, and the V1 plan (`docs/plans/v1.md`).
-- Toolchain on the dev box: Rust 1.99.1 (GNU target, plus wasm32) and Node 22.23.3.
+- V0 merged and tagged `v0.1.0` (PR #2).
+- CP1 (PR #3): guided PIBT with causal wait records, floor operations, calibrated presets (medium 31.4 parcels/h per robot), 66 tests, viewer presets and legend. Gate report: `docs/checkpoints/v1-cp1.md`.
 
 ## Next
-1. V0 walking skeleton (see the plan): workspace and CI, core skeleton, CLI, viewer.
-2. CP1: guided PIBT and floor operations.
+1. CP2: causality (wait-for chain walk, cycle detection), trace builder, exporters (Perfetto, OTLP, JSONL), fault catalog and resilience score.
+2. CP3: post-mortems (CUSUM, counterfactual replays, Shapley) and viewer features.
 
 ## Blockers
 - None.
 
 ## Decisions log
-- ADR 0001 Rust core + CLI + WASM viewer · 0002 determinism · 0003 guided PIBT · 0004 event stream and traces · 0005 counterfactual RCA
+- ADRs 0001–0005. CP1: station cap 6, configurable; waits recorded for all movable robots, events for working robots only.

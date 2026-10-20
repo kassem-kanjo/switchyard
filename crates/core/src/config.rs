@@ -65,6 +65,21 @@ pub struct FloorConfig {
 pub struct FleetConfig {
     /// Number of robots.
     pub robots: u32,
+    /// Robots that may be heading to (or loading at) one station at once.
+    ///
+    /// A station's throughput is at most `inbound / (trip + load)` parcels
+    /// per tick, and a trip to the station is 30-60 ticks on the medium and
+    /// large floors, so keeping a station busy at 800 parcels/h needs about
+    /// five robots in its pipeline (Little's law). The default, 6, keeps every
+    /// preset level with demand while capping the crowd around the induction
+    /// cell (measured at CP1: 2 left medium at 20 parcels/h per robot with a
+    /// growing backlog, 4 left a backlog on `large`, 8 gained nothing).
+    #[serde(default = "default_max_inbound")]
+    pub max_inbound_per_station: u16,
+}
+
+const fn default_max_inbound() -> u16 {
+    6
 }
 
 /// Parcel arrival process.
@@ -309,6 +324,16 @@ impl ScenarioConfig {
                 per_hour: self.arrivals.parcels_per_hour_per_station,
             });
         }
+        if self.chutes.bag_swap_ticks >= self.planner.watchdog_ticks {
+            // A robot waiting out a bag swap is not stuck: a swap as long as
+            // the watchdog window would raise false `RobotStalled` alarms.
+            return Err(ConfigError::OutOfRange {
+                field: "chutes.bag_swap_ticks",
+                value: u64::from(self.chutes.bag_swap_ticks),
+                min: 1,
+                max: u64::from(self.planner.watchdog_ticks.saturating_sub(1)),
+            });
+        }
         let durations = [
             ("timing.load_ticks", u32::from(self.timing.load_ticks)),
             ("timing.drop_ticks", u32::from(self.timing.drop_ticks)),
@@ -318,7 +343,13 @@ impl ScenarioConfig {
         if let Some((field, _)) = durations.iter().find(|(_, v)| *v == 0) {
             return Err(ConfigError::ZeroDuration(field));
         }
-        let ranges: [(&'static str, u64, u64, u64); 5] = [
+        let ranges: [(&'static str, u64, u64, u64); 6] = [
+            (
+                "fleet.max_inbound_per_station",
+                u64::from(self.fleet.max_inbound_per_station),
+                1,
+                u64::from(u16::MAX),
+            ),
             (
                 "arrivals.destinations",
                 self.arrivals.destinations.map_or(1, u64::from),
@@ -434,5 +465,36 @@ mod tests {
         assert_eq!(cfg.scanner.error_rate_ppm, 0);
         assert_eq!(cfg.arrivals.destinations, None);
         assert_eq!(cfg.arrivals.zipf_s_milli, 0);
+        assert_eq!(cfg.fleet.max_inbound_per_station, 6);
+    }
+
+    #[test]
+    fn rejects_bag_swaps_the_watchdog_would_call_a_stall() {
+        // A robot waiting out a bag swap is not stuck; a swap as long as the
+        // watchdog window would raise false RobotStalled alarms.
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        cfg.chutes.bag_swap_ticks = cfg.planner.watchdog_ticks;
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "chutes.bag_swap_ticks",
+                ..
+            })
+        ));
+        cfg.chutes.bag_swap_ticks = cfg.planner.watchdog_ticks - 1;
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_a_zero_station_cap() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        cfg.fleet.max_inbound_per_station = 0;
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "fleet.max_inbound_per_station",
+                ..
+            })
+        ));
     }
 }

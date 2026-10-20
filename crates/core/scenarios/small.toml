@@ -24,6 +24,8 @@ south_margin = 6
 
 [fleet]
 robots = 40
+# Robots that may head to (or load at) one station at once.
+max_inbound_per_station = 6
 
 [arrivals]
 # Poisson arrivals: 4 stations x 400/h = 1,600 parcels/h offered

@@ -11,8 +11,13 @@
 //! 1. Robots are sorted by priority: robots with a task first, then robots
 //!    heading to parking, then robots with nothing to do; within a class, the
 //!    longer since the robot's goal was issued or reached, the higher
-//!    (Okumura's "elapsed" priority, which is what guarantees every robot
-//!    eventually reaches its goal on suitable graphs); ties break by id.
+//!    (Okumura's "elapsed" priority); ties break by id. On graphs where
+//!    every pair of adjacent cells lies on a cycle (e.g. biconnected ones),
+//!    Okumura et al. prove that this priority lets every robot reach its
+//!    goal. That proof assumes every robot can be pushed; robots that are
+//!    fixed for a while here (loading, dropping) act as temporary obstacles
+//!    and void the guarantee, which is one reason the sim runs watchdogs
+//!    (`Event::Stalled`, `Event::RobotStalled`).
 //! 2. Each undecided robot, in that order, calls `pibt(a, parent)`: it ranks
 //!    its candidate cells (four neighbours and staying put) by guided cost to
 //!    its goal and takes the best one not reserved for the next tick. If a
@@ -31,12 +36,21 @@
 //! depends only on the input (ADR 0002).
 //!
 //! # Causal records
-//! The inheritance tree is the explanation (research §7): a robot that did
-//! not get closer to its goal looks at its best candidate cell `u`:
+//! The inheritance tree is the explanation (research §7). A cause is
+//! recorded for every movable robot that either did not get closer to its
+//! goal, or was pushed and could not move (an idle or parked robot in the
+//! way), so every wait-for chain can be walked to its end. The robot looks
+//! at its best candidate move `u` (when pushed, other than its parent's
+//! cell, unless that is where it wants to go):
 //! - a robot that stays in `u` holds it: `BlockedBy(that robot)`;
 //! - a robot that moved into `u` won it on priority: `Yielded(that robot)`;
-//! - otherwise the robot gave way to the robot that pushed it (its parent in
-//!   the inheritance tree), or `u` is that parent's cell: `Yielded(parent)`.
+//! - otherwise it was pushed and is waiting on its parent in the
+//!   inheritance tree: `Yielded(parent)` if the parent moved, or
+//!   `BlockedBy(parent)` if the parent stayed too (a head-on deadlock, which
+//!   shows up as a 2-cycle in the wait-for graph).
+//!
+//! Hence `BlockedBy(b)` always names a robot that did not move this tick and
+//! `Yielded(b)` one that did.
 
 use crate::events::WaitCause;
 use crate::grid::CellIdx;
@@ -170,37 +184,62 @@ impl PibtPlanner {
         false
     }
 
-    /// The cause for robot `r`, which did not get closer to its goal (see
-    /// the module docs).
-    fn cause(&self, input: &PlanInput<'_>, r: usize) -> Option<WaitCause> {
+    /// The cause for robot `r`, which did not get closer to its goal or was
+    /// pushed and could not move (see the module docs). `wants` is true if
+    /// the robot has a goal it is not at.
+    fn cause(
+        &self,
+        input: &PlanInput<'_>,
+        out: &PlanOutput,
+        r: usize,
+        wants: bool,
+    ) -> Option<WaitCause> {
         let mut cands = [Candidate {
             key: 0,
             tie: 0,
             cell: 0,
         }; 5];
         let n = Self::candidates(input, r, &mut cands);
-        let best = cands[..n].first()?.cell;
+        let here = input.pos[r];
         let parent = self.parent[r];
-        let holder = self.occ_next[best as usize];
+        let parent_cell = (parent != NONE).then(|| input.pos[parent as usize]);
         // r < robot count, which fits in u32.
         #[allow(clippy::cast_possible_truncation)]
         let id = r as u32;
-        if holder != NONE && holder != id && holder != parent {
-            let h = RobotId(holder);
-            return Some(if input.pos[holder as usize] == best {
-                WaitCause::BlockedBy(h)
-            } else {
-                WaitCause::Yielded(h)
-            });
+        for c in &cands[..n] {
+            let u = c.cell;
+            if u == here {
+                continue;
+            }
+            if Some(u) == parent_cell {
+                if wants {
+                    // It wants the cell of the robot pushing it.
+                    break;
+                }
+                continue;
+            }
+            let holder = self.occ_next[u as usize];
+            if holder != NONE && holder != id && holder != parent {
+                let h = RobotId(holder);
+                return Some(if input.pos[holder as usize] == u {
+                    WaitCause::BlockedBy(h)
+                } else {
+                    WaitCause::Yielded(h)
+                });
+            }
+            break;
         }
         if parent != NONE {
-            return Some(WaitCause::Yielded(RobotId(parent)));
+            let p = parent as usize;
+            let b = RobotId(parent);
+            return Some(if out.next[p] == input.pos[p] {
+                WaitCause::BlockedBy(b)
+            } else {
+                WaitCause::Yielded(b)
+            });
         }
-        debug_assert!(
-            holder != NONE,
-            "robot {r} made no progress with its best cell free"
-        );
-        (holder != NONE).then_some(WaitCause::BlockedBy(RobotId(holder)))
+        debug_assert!(false, "robot {r} made no progress with its best cell free");
+        None
     }
 }
 
@@ -253,28 +292,26 @@ impl Planner for PibtPlanner {
             }
         }
 
+        let d = input.distances;
         for r in 0..n {
-            let Some(goal) = input.goal[r] else {
-                continue;
-            };
             if !input.movable[r] {
                 continue;
             }
-            let d = input.distances;
-            let d_here = d.get(goal, input.pos[r]);
-            if d_here == 0 || d_here == UNREACHABLE {
-                continue;
+            let (here, next) = (input.pos[r], out.next[r]);
+            let wants = input.goal[r].is_some_and(|g| {
+                let dh = d.get(g, here);
+                dh != 0 && dh != UNREACHABLE && d.get(g, next) >= dh
+            });
+            let pushed_and_stuck = self.parent[r] != NONE && next == here;
+            if wants || pushed_and_stuck {
+                out.cause[r] = self.cause(input, out, r, wants);
             }
-            if d.get(goal, out.next[r]) < d_here {
-                continue;
-            }
-            out.cause[r] = self.cause(input, r);
         }
     }
 
     fn hash_state(&self, h: &mut Fnv1a) {
         // Stateless between ticks; the tag pins the algorithm version.
-        h.write(b"pibt-v1");
+        h.write(b"pibt-v2");
     }
 }
 
@@ -404,6 +441,39 @@ mod tests {
     }
 
     #[test]
+    fn pushed_robot_that_cannot_move_records_its_own_blocker() {
+        // An idle robot (1) stands in the busy robot's (0) way, boxed in by
+        // two fixed robots (2, 3). The chain 0 -> 1 -> {2 or 3} must be
+        // walkable, so the idle robot records a cause too.
+        let l = layout();
+        let d = DistanceTables::build(&l, 3);
+        let g = &l.grid;
+        let case = Case {
+            pos: vec![
+                g.idx(Pos::new(3, 1)),
+                g.idx(Pos::new(3, 2)),
+                g.idx(Pos::new(2, 2)),
+                g.idx(Pos::new(4, 2)),
+            ],
+            goal: vec![Some(Goal::Chute(ChuteId(0))), None, None, None],
+            movable: vec![true, true, false, false],
+            priority: vec![5, 0, 0, 0],
+        };
+        let out = plan(&l, &d, &case, 0);
+        assert_eq!(out.next, case.pos, "nobody can move");
+        assert_eq!(out.cause[0], Some(WaitCause::BlockedBy(RobotId(1))));
+        assert!(
+            matches!(
+                out.cause[1],
+                Some(WaitCause::BlockedBy(RobotId(2) | RobotId(3)))
+            ),
+            "{:?}",
+            out.cause[1]
+        );
+        assert_eq!(out.cause[2], None);
+    }
+
+    #[test]
     fn head_on_robots_do_not_swap() {
         let l = layout();
         let d = DistanceTables::build(&l, 3);
@@ -458,12 +528,28 @@ mod tests {
                     let dh = d.get(goal, from);
                     dh != 0 && dh != UNREACHABLE && d.get(goal, to) >= dh
                 });
-            assert_eq!(
-                out.cause[r].is_some(),
-                wants,
-                "robot {r}: {:?}",
-                out.cause[r]
-            );
+            let cause = out.cause[r];
+            if wants {
+                assert!(cause.is_some(), "robot {r} made no progress, no cause");
+            }
+            if cause.is_some() {
+                // Otherwise only a robot that someone tried to push and
+                // that could not move records a cause.
+                assert!(c.movable[r], "fixed robot {r} has {cause:?}");
+                assert!(wants || from == to, "robot {r} moved on yet {cause:?}");
+            }
+            match cause {
+                Some(WaitCause::BlockedBy(b)) => {
+                    assert_ne!(b.index(), r, "robot {r} blocked by itself");
+                    assert_eq!(out.next[b.index()], c.pos[b.index()], "{b} did not stay");
+                }
+                Some(WaitCause::Yielded(b)) => {
+                    assert_ne!(b.index(), r, "robot {r} yielded to itself");
+                    assert_ne!(out.next[b.index()], c.pos[b.index()], "{b} did not move");
+                }
+                Some(other) => panic!("planner reported {other:?}"),
+                None => {}
+            }
         }
     }
 

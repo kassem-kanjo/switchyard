@@ -79,7 +79,7 @@ pub struct Robots {
     /// Ticks left in a timed state (`Loading`, `Dropping`).
     pub timer: Vec<u16>,
     /// Consecutive ticks the robot recorded a wait cause.
-    pub waited: Vec<u16>,
+    pub waited: Vec<u32>,
     /// Tick the robot's current goal was issued or last reached. PIBT's
     /// priority is the time since (Okumura et al.).
     pub goal_since: Vec<Tick>,
@@ -112,6 +112,10 @@ impl Robots {
 pub struct Parcels {
     /// Station where the parcel was inducted.
     pub station: Vec<StationId>,
+    /// Arrival order of the parcel at its station (0 for the station's
+    /// first parcel). Random draws for a parcel are keyed on
+    /// `(station, ordinal)`, so they never depend on other parcels.
+    pub ordinal: Vec<u32>,
     /// Sort destination.
     pub destination: Vec<DestinationId>,
     /// Tick of arrival at the station.
@@ -167,6 +171,8 @@ pub struct Stations {
     pub queue: Vec<VecDeque<ParcelId>>,
     /// Robots assigned to this station and not yet finished loading.
     pub inbound: Vec<u16>,
+    /// Parcels that have arrived at this station so far.
+    pub arrived: Vec<u32>,
 }
 
 /// All entity state of a running simulation.

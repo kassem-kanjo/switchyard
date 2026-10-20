@@ -88,6 +88,7 @@ fn run(path: &PathBuf, ticks: u32, seed: Option<u64>) -> Result<(), String> {
     let mut events = Vec::new();
     let mut waits = WaitCounts::default();
     let mut stalls = 0u64;
+    let mut robot_stalls = 0u64;
     let started = std::time::Instant::now();
     for _ in 0..ticks {
         sim.step(&mut events);
@@ -101,6 +102,7 @@ fn run(path: &PathBuf, ticks: u32, seed: Option<u64>) -> Result<(), String> {
                     WaitCause::StationBusy(_) => waits.station += 1,
                 },
                 Event::Stalled { .. } => stalls += 1,
+                Event::RobotStalled { .. } => robot_stalls += 1,
                 _ => {}
             }
         }
@@ -137,7 +139,7 @@ fn run(path: &PathBuf, ticks: u32, seed: Option<u64>) -> Result<(), String> {
         "robot waits   blocked {}, yielded {}, cell blocked {}, chute unavailable {}, station busy {} (robot-ticks)",
         waits.blocked, waits.yielded, waits.cell, waits.chute, waits.station
     );
-    println!("stalls        {stalls}");
+    println!("stalls        floor {stalls}, robot {robot_stalls}");
     println!(
         "speed         {:.0} ticks/s wall ({:.2} s)",
         f64::from(stats.tick) / wall.max(1e-9),

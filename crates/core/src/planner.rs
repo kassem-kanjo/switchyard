@@ -14,11 +14,14 @@
 //!   dropping, waiting at a chute) keeps its cell.
 //! - **Induction cells** are entered only by a robot whose goal is that
 //!   station, so stations never become through-traffic choke points.
-//! - **Causes:** every robot with a goal that it did not get closer to
-//!   (by guided distance) gets a [`WaitCause`] in `cause[r]`, unless it was
-//!   already at its goal. Planners report only robot-to-robot causes
-//!   (`BlockedBy`, `Yielded`); the sim refines them with what it knows about
-//!   stations and chutes (ARCHITECTURE §4).
+//! - **Causes:** every movable robot that did not get closer to its goal
+//!   (by guided distance; robots already at their goal excepted), or that
+//!   another robot tried to push and that could not move, gets a
+//!   [`WaitCause`] in `cause[r]`; no other robot does. `BlockedBy(b)` names a
+//!   robot that stayed put, `Yielded(b)` one that moved. Recording pushed
+//!   robots too keeps every wait-for chain walkable through idle and parked
+//!   robots. Planners report only robot-to-robot causes; the sim refines
+//!   them with what it knows about stations and chutes (ARCHITECTURE §4).
 //! - **Determinism:** the result depends only on the input (ADR 0002).
 //!
 //! [`crate::sim::Sim`] checks the first three in debug builds.
@@ -62,9 +65,9 @@ pub struct PlanInput<'a> {
 pub struct PlanOutput {
     /// Next cell of each robot.
     pub next: Vec<CellIdx>,
-    /// For each robot that wanted to get closer to its goal but did not: why
-    /// (`BlockedBy` or `Yielded`). These are the wait-for edges of the tick
-    /// (ARCHITECTURE §4).
+    /// For each robot that wanted to get closer to its goal but did not, or
+    /// was pushed and could not move: why (`BlockedBy` or `Yielded`). These
+    /// are the wait-for edges of the tick (ARCHITECTURE §4).
     pub cause: Vec<Option<WaitCause>>,
 }
 

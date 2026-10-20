@@ -2,10 +2,13 @@
 //!
 //! Both samplers are inverse-CDF tables in Q32.32 fixed point, built once
 //! with integer math ([`crate::fixed`]), so they are bit-identical on every
-//! platform (ADR 0002 §1). Each sample consumes a fixed number of draws from
-//! the caller's stream (one `u64` per Poisson count, one rejection-sampled
-//! value per destination), and every station has its own streams, so the
-//! arrivals at one station never depend on another station (ADR 0002 §3).
+//! platform (ADR 0002 §1). Every station has its own streams, so the
+//! arrivals at one station never depend on another station (ADR 0002 §3):
+//! - the Poisson count takes exactly one `u64` per station per tick, so the
+//!   arrival stream's position is a function of the tick alone;
+//! - a destination is a *keyed* draw ([`Stream::keyed_below`]) on the
+//!   parcel's ordinal at its station, so parcel `k` at station `s` gets the
+//!   same destination however many parcels arrived before it.
 
 use crate::TICKS_PER_HOUR;
 use crate::fixed::{ONE, exp_neg, pow_neg_milli};
@@ -97,10 +100,11 @@ impl ZipfTable {
         self.cdf.is_empty()
     }
 
-    /// Draw a destination id.
-    pub fn sample(&self, stream: &mut Stream) -> u16 {
+    /// The destination of the parcel with ordinal `index` on `stream` (a
+    /// keyed draw: independent of every other parcel).
+    pub fn sample_keyed(&self, stream: &mut Stream, index: u64) -> u16 {
         let total = self.cdf.last().copied().unwrap_or(1);
-        let x = stream.below(total);
+        let x = stream.keyed_below(index, total);
         let d = self.cdf.partition_point(|&c| c <= x);
         u16::try_from(d).unwrap_or(u16::MAX)
     }
@@ -164,8 +168,8 @@ mod tests {
         let mut s = Stream::new(9, StreamId::destinations(0));
         let uniform = ZipfTable::new(4, 0);
         let mut counts = [0u32; 4];
-        for _ in 0..40_000 {
-            counts[usize::from(uniform.sample(&mut s))] += 1;
+        for i in 0..40_000 {
+            counts[usize::from(uniform.sample_keyed(&mut s, i))] += 1;
         }
         assert!(
             counts.iter().all(|&c| (9_500..=10_500).contains(&c)),
@@ -175,8 +179,8 @@ mod tests {
         // s = 1: destination 0 is drawn twice as often as destination 1.
         let skewed = ZipfTable::new(100, 1_000);
         let mut counts = vec![0u32; 100];
-        for _ in 0..100_000 {
-            counts[usize::from(skewed.sample(&mut s))] += 1;
+        for i in 0..100_000 {
+            counts[usize::from(skewed.sample_keyed(&mut s, i))] += 1;
         }
         let ratio_milli = counts[0] * 1_000 / counts[1];
         assert!((1_900..=2_100).contains(&ratio_milli), "{ratio_milli}");
