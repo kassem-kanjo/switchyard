@@ -35,6 +35,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -p switchyard-cli -- run --scenario scenarios/small.toml --ticks 2000
+cargo run --release -p switchyard-cli -- run --scenario medium --ticks 14400   # preset by name
 
 cd viewer && npm install && npm run dev      # viewer
 ```

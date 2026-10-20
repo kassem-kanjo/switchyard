@@ -32,8 +32,15 @@ impl StreamId {
         Self(0x0002_0000 | station as u64)
     }
 
-    /// The planner's escape moves.
+    /// The V0 planner's escape moves. Unused since guided PIBT (which needs
+    /// no randomness), but the id stays reserved so it is never reused.
     pub const PLANNER: Self = Self(0x0003_0000);
+
+    /// Scanner misreads at one station.
+    #[must_use]
+    pub const fn scanner(station: u16) -> Self {
+        Self(0x0004_0000 | station as u64)
+    }
 }
 
 /// A deterministic random stream (a thin wrapper, so the rest of the core

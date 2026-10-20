@@ -145,3 +145,30 @@ fn rejects_floors_that_cannot_hold_the_request() {
         Err(ConfigError::NoChutes)
     );
 }
+
+#[test]
+fn parking_cells_are_free_unique_and_never_chute_access() {
+    each_layout(|f, l| {
+        let g = &l.grid;
+        assert!(!l.parking.is_empty(), "{f:?}: no parking");
+        let mut seen = vec![false; g.len()];
+        for &p in &l.parking {
+            assert_eq!(g.cell(p), Cell::Free, "{f:?}: parking on {:?}", g.cell(p));
+            assert!(!seen[p as usize], "{f:?}: duplicate parking cell {p}");
+            seen[p as usize] = true;
+            // Parked robots must never stand where another robot drops or
+            // where a station is entered.
+            for n in g.neighbours(p) {
+                assert!(
+                    !matches!(g.cell(n), Cell::Chute(_) | Cell::Induction(_)),
+                    "{f:?}: parking cell {p} touches {:?}",
+                    g.cell(n)
+                );
+            }
+        }
+        // Row 1 is entirely parking.
+        for x in 1..f.width - 1 {
+            assert!(seen[g.idx(Pos::new(x, 1)) as usize]);
+        }
+    });
+}

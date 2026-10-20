@@ -1,0 +1,51 @@
+# Switchyard scenario: medium hub.
+#
+# Calibration (docs/research/2026-10-19-industry-and-client.md, section 4):
+# medium hubs run 120-250 robots at 4,000-9,000 parcels/h (25-50 parcels/h
+# per robot) with 300-500 chutes; Aramex Jeddah (120 robots, 4,000/h) and
+# SPL Riyadh (200 robots) are the Gulf anchors. Manual induction runs about
+# 1,300 parcels/h per feeding line. These defaults are vendor-claimed,
+# range-calibrated, not measured.
+#
+# Units: 1 tick = 0.5 s, 1 cell = 1 m. Every field is an integer (ADR 0002).
+# Source of truth: crates/core/scenarios/ (embedded by switchyard-core);
+# the copy in the repository's scenarios/ directory must match it.
+
+name = "medium"
+seed = 1
+
+[floor]
+# 64 x 54 cells: a 20 x 15 chute lattice (300 chutes).
+width = 64
+height = 54
+stations = 8
+south_margin = 6
+
+[fleet]
+robots = 200
+
+[arrivals]
+# 8 stations x 800/h = 6,400 parcels/h offered (32 per robot per hour).
+parcels_per_hour_per_station = 800
+destinations = 300
+zipf_s_milli = 800
+
+[timing]
+# Scan-and-place at induction: 4 ticks = 2 s (about 1,200/h per station at
+# full utilisation).
+load_ticks = 4
+drop_ticks = 2
+
+[chutes]
+bag_capacity = 50
+bag_swap_ticks = 60
+mapping = "popularity_near_induction"
+
+[scanner]
+error_rate_ppm = 0
+
+[guidance]
+against_flow_cost = 3
+
+[planner]
+watchdog_ticks = 600

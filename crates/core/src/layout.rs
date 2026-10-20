@@ -17,8 +17,15 @@
 //! ```
 //!
 //! Two-cell aisles mean every chute has four free neighbours and two robots
-//! can pass side by side, which CP1's one-way lane guidance (ADR 0003) relies
-//! on.
+//! can pass side by side, which the one-way lane guidance (ADR 0003,
+//! [`crate::guidance`]) relies on: each aisle carries one lane each way.
+//!
+//! # Parking
+//! The outermost ring of the floor (row 1 and columns 1 and `W - 2`, down to
+//! the last chute row) is the **parking lane**. No chute is reachable from
+//! it (the lattice starts at 3, so access cells sit at 2 at the furthest),
+//! so parked robots never block a drop. Idle robots with no work park there
+//! instead of loitering in the sort field (throttling, ADR 0003).
 
 use crate::config::{ConfigError, FloorConfig};
 use crate::grid::{Cell, CellIdx, Grid, Pos};
@@ -43,6 +50,8 @@ pub struct Layout {
     pub stations: Vec<CellIdx>,
     /// Hole cell of each chute, indexed by [`ChuteId`].
     pub chutes: Vec<CellIdx>,
+    /// Parking cells, in row-major order (see the module docs).
+    pub parking: Vec<CellIdx>,
 }
 
 /// Generate the floor for `floor`.
@@ -110,10 +119,22 @@ pub fn generate(floor: &FloorConfig) -> Result<Layout, ConfigError> {
         return Err(ConfigError::NoChutes);
     }
 
+    // Parking: row 1, plus columns 1 and w - 2 down to the last chute row,
+    // which keeps them clear of the staging rows by the stations.
+    let last_chute_y = grid.pos(*chutes.last().unwrap_or(&0)).y;
+    let parking = (0..grid.len())
+        .filter_map(|i| u32::try_from(i).ok())
+        .filter(|&i| {
+            let p = grid.pos(i);
+            grid.is_free(i) && (p.y == 1 || ((p.x == 1 || p.x == w - 2) && p.y <= last_chute_y))
+        })
+        .collect();
+
     let layout = Layout {
         grid,
         stations,
         chutes,
+        parking,
     };
     layout
         .check_invariants()
@@ -139,7 +160,9 @@ impl Layout {
     /// [`UNREACHABLE`].
     ///
     /// Integer BFS keeps the result exact and platform-independent (ADR 0002).
-    /// CP1 replaces it with Dijkstra over lane-weighted edges (ADR 0003).
+    /// The planner uses lane-weighted Dijkstra instead
+    /// ([`crate::guidance::DistanceTables`]); this unweighted field serves the
+    /// layout's own invariant checks.
     #[must_use]
     pub fn distance_field(&self, sources: &[CellIdx]) -> Vec<u16> {
         let mut dist = vec![UNREACHABLE; self.grid.len()];

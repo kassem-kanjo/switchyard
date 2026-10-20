@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 
 use crate::Tick;
+use crate::events::ChuteState;
 use crate::grid::CellIdx;
 use crate::ids::{ChuteId, DestinationId, ParcelId, RobotId, StationId};
 
@@ -60,6 +61,8 @@ pub enum Goal {
     Station(StationId),
     /// Any free cell adjacent to a chute.
     Chute(ChuteId),
+    /// Any parking cell (an idle robot getting out of the way).
+    Park,
 }
 
 /// Robot columns, indexed by [`RobotId`].
@@ -75,8 +78,11 @@ pub struct Robots {
     pub goal: Vec<Option<Goal>>,
     /// Ticks left in a timed state (`Loading`, `Dropping`).
     pub timer: Vec<u16>,
-    /// Consecutive ticks the robot wanted to move but could not.
+    /// Consecutive ticks the robot recorded a wait cause.
     pub waited: Vec<u16>,
+    /// Tick the robot's current goal was issued or last reached. PIBT's
+    /// priority is the time since (Okumura et al.).
+    pub goal_since: Vec<Tick>,
 }
 
 impl Robots {
@@ -116,6 +122,8 @@ pub struct Parcels {
     pub phase_since: Vec<Tick>,
     /// Robot assigned to the parcel, if any.
     pub robot: Vec<Option<RobotId>>,
+    /// Chute the scanner sent it to, once loaded (wrong after a misread).
+    pub target: Vec<Option<ChuteId>>,
     /// Chute it was dropped into, once dropped.
     pub chute: Vec<Option<ChuteId>>,
 }
@@ -139,10 +147,15 @@ impl Parcels {
 pub struct Chutes {
     /// Hole cell.
     pub cell: Vec<CellIdx>,
-    /// Destination served. V0 maps chute `i` to destination `i`.
-    pub destination: Vec<DestinationId>,
-    /// Parcels in the bag. Capacity and bag swaps arrive in CP1.
+    /// Parcels in the bag.
     pub fill: Vec<u32>,
+    /// Open or swapping.
+    pub state: Vec<ChuteState>,
+    /// Ticks left in a bag swap.
+    pub timer: Vec<u32>,
+    /// Robots dropping into the chute right now. A drop starts only if
+    /// `fill + incoming < capacity`, so a bag never overflows.
+    pub incoming: Vec<u16>,
 }
 
 /// Station columns, indexed by [`StationId`].
@@ -167,4 +180,7 @@ pub struct World {
     pub chutes: Chutes,
     /// Induction stations.
     pub stations: Stations,
+    /// The chute serving each destination, indexed by [`DestinationId`]
+    /// (fixed at start by the configured mapping strategy).
+    pub destination_chute: Vec<ChuteId>,
 }

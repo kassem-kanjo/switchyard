@@ -2,7 +2,12 @@
 //!
 //! Every field is an integer so that a scenario file maps to sim state
 //! without any float rounding (ADR 0002 §1). Rates are expressed per hour and
-//! converted to per-tick probabilities with integer arithmetic.
+//! converted to per-tick sampling tables with integer arithmetic
+//! ([`crate::arrivals`]).
+//!
+//! Sections added after V0 (`chutes`, `scanner`, `guidance`, `planner`, and
+//! the new `arrivals` fields) have documented defaults, so older scenario
+//! files keep loading.
 
 use std::fmt;
 
@@ -26,6 +31,18 @@ pub struct ScenarioConfig {
     pub arrivals: ArrivalConfig,
     /// Durations of fixed operations.
     pub timing: TimingConfig,
+    /// Chute bags and the destination-to-chute mapping.
+    #[serde(default)]
+    pub chutes: ChuteConfig,
+    /// The induction scanner.
+    #[serde(default)]
+    pub scanner: ScannerConfig,
+    /// Lane guidance for the planner (ADR 0003).
+    #[serde(default)]
+    pub guidance: GuidanceConfig,
+    /// Planner safety nets.
+    #[serde(default)]
+    pub planner: PlannerConfig,
 }
 
 /// Floor geometry, consumed by [`crate::layout::generate`].
@@ -54,10 +71,19 @@ pub struct FleetConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArrivalConfig {
-    /// Mean arrivals per hour at each station. V0 draws at most one arrival
-    /// per station per tick (a Bernoulli process), so this must not exceed
-    /// [`TICKS_PER_HOUR`]. CP1 replaces it with a Poisson process.
+    /// Mean arrivals per hour at each station: a Poisson process per station
+    /// (see [`crate::arrivals`]). At most [`TICKS_PER_HOUR`] (a mean of one
+    /// per tick), far above any real induction rate.
     pub parcels_per_hour_per_station: u32,
+    /// Number of sort destinations (postcode groups). Omitted: one per chute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destinations: Option<u16>,
+    /// Zipf exponent `s` of destination popularity, times 1,000: destination
+    /// `d` is drawn with weight `(d + 1)^-s`, so destination 0 is the most
+    /// popular. 0 (the default) is uniform; hub volumes are skewed towards a
+    /// few big destinations, which `s` near 1 models.
+    #[serde(default)]
+    pub zipf_s_milli: u32,
 }
 
 /// Durations of fixed operations, in ticks.
@@ -68,6 +94,93 @@ pub struct TimingConfig {
     pub load_ticks: u16,
     /// Ticks a robot spends next to the chute while it drops the parcel.
     pub drop_ticks: u16,
+}
+
+/// Chute bags and the destination-to-chute mapping.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ChuteConfig {
+    /// Parcels a bag holds before it must be swapped.
+    pub bag_capacity: u32,
+    /// Ticks a bag swap takes. The chute accepts nothing meanwhile, and
+    /// robots waiting at it record `ChuteUnavailable`.
+    pub bag_swap_ticks: u32,
+    /// How destinations are assigned to chutes.
+    pub mapping: ChuteMapping,
+}
+
+impl Default for ChuteConfig {
+    fn default() -> Self {
+        // A 50-parcel bag swapped in 30 s, typical of manual bag changes at
+        // robotic sort walls (vendor-claimed, range-calibrated, not measured).
+        Self {
+            bag_capacity: 50,
+            bag_swap_ticks: 60,
+            mapping: ChuteMapping::RoundRobin,
+        }
+    }
+}
+
+/// Destination-to-chute mapping strategy. The mapping sets the floor's
+/// traffic pattern; a good one is worth 8-29 % throughput (Zhang et al.
+/// 2025, `docs/research/2026-10-19-robot-coordination.md` §2.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChuteMapping {
+    /// Destination `d` goes to chute `d mod chutes`.
+    #[default]
+    RoundRobin,
+    /// The most popular destinations go to the chutes nearest the stations
+    /// (by guided distance summed over all stations), so the bulk of the
+    /// volume makes short trips.
+    PopularityNearInduction,
+}
+
+/// The induction scanner.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ScannerConfig {
+    /// Probability of a misread, in parts per million. A misread parcel is
+    /// sent to a wrong chute and reported as `ParcelMisSorted` when dropped.
+    /// Real baselines are 100-1,000 ppm (0.01-0.1 %); the default is 0 so
+    /// that mis-sorts appear only when a scenario asks for them.
+    pub error_rate_ppm: u32,
+}
+
+/// Lane guidance (ADR 0003).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct GuidanceConfig {
+    /// Cost of moving one cell against a lane's preferred direction (moving
+    /// with it costs 1). 1 disables guidance.
+    pub against_flow_cost: u32,
+}
+
+impl Default for GuidanceConfig {
+    fn default() -> Self {
+        Self {
+            against_flow_cost: 3,
+        }
+    }
+}
+
+/// Planner safety nets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PlannerConfig {
+    /// If robots have work but none has made progress for this many ticks,
+    /// the sim emits `Event::Stalled` (a deadlock or livelock) instead of
+    /// silently going quiet (ADR 0003, robustness).
+    pub watchdog_ticks: u32,
+}
+
+impl Default for PlannerConfig {
+    fn default() -> Self {
+        // 5 simulated minutes: longer than any legitimate wait (a bag swap).
+        Self {
+            watchdog_ticks: 600,
+        }
+    }
 }
 
 /// Why a scenario could not be loaded or turned into a simulation.
@@ -98,13 +211,24 @@ pub enum ConfigError {
         /// Maximum that fits on this floor.
         max: u32,
     },
-    /// The arrival rate exceeds one parcel per station per tick.
+    /// The arrival rate exceeds a mean of one parcel per station per tick.
     ArrivalRateTooHigh {
         /// Requested rate.
         per_hour: u32,
     },
-    /// A timing value is zero (every operation takes at least one tick).
+    /// A duration is zero (every operation takes at least one tick).
     ZeroDuration(&'static str),
+    /// A value is outside its allowed range.
+    OutOfRange {
+        /// The offending field, as `section.field`.
+        field: &'static str,
+        /// Its value.
+        value: u64,
+        /// Smallest allowed value.
+        min: u64,
+        /// Largest allowed value.
+        max: u64,
+    },
     /// The generated layout broke an invariant (a station or chute is
     /// unreachable). This is a generator bug or a degenerate floor.
     Unreachable(String),
@@ -131,7 +255,13 @@ impl fmt::Display for ConfigError {
                 f,
                 "{per_hour} parcels/h per station exceeds one per tick ({TICKS_PER_HOUR}/h)"
             ),
-            Self::ZeroDuration(field) => write!(f, "timing.{field} must be at least 1 tick"),
+            Self::ZeroDuration(field) => write!(f, "{field} must be at least 1 tick"),
+            Self::OutOfRange {
+                field,
+                value,
+                min,
+                max,
+            } => write!(f, "{field} = {value} is outside {min}..={max}"),
             Self::Unreachable(msg) => write!(f, "layout is not fully connected: {msg}"),
         }
     }
@@ -179,11 +309,56 @@ impl ScenarioConfig {
                 per_hour: self.arrivals.parcels_per_hour_per_station,
             });
         }
-        if self.timing.load_ticks == 0 {
-            return Err(ConfigError::ZeroDuration("load_ticks"));
+        let durations = [
+            ("timing.load_ticks", u32::from(self.timing.load_ticks)),
+            ("timing.drop_ticks", u32::from(self.timing.drop_ticks)),
+            ("chutes.bag_swap_ticks", self.chutes.bag_swap_ticks),
+            ("planner.watchdog_ticks", self.planner.watchdog_ticks),
+        ];
+        if let Some((field, _)) = durations.iter().find(|(_, v)| *v == 0) {
+            return Err(ConfigError::ZeroDuration(field));
         }
-        if self.timing.drop_ticks == 0 {
-            return Err(ConfigError::ZeroDuration("drop_ticks"));
+        let ranges: [(&'static str, u64, u64, u64); 5] = [
+            (
+                "arrivals.destinations",
+                self.arrivals.destinations.map_or(1, u64::from),
+                1,
+                u64::from(u16::MAX),
+            ),
+            (
+                "arrivals.zipf_s_milli",
+                u64::from(self.arrivals.zipf_s_milli),
+                0,
+                5_000,
+            ),
+            (
+                "chutes.bag_capacity",
+                u64::from(self.chutes.bag_capacity),
+                1,
+                1_000_000,
+            ),
+            (
+                "scanner.error_rate_ppm",
+                u64::from(self.scanner.error_rate_ppm),
+                0,
+                1_000_000,
+            ),
+            (
+                "guidance.against_flow_cost",
+                u64::from(self.guidance.against_flow_cost),
+                1,
+                100,
+            ),
+        ];
+        for (field, value, min, max) in ranges {
+            if !(min..=max).contains(&value) {
+                return Err(ConfigError::OutOfRange {
+                    field,
+                    value,
+                    min,
+                    max,
+                });
+            }
         }
         Ok(())
     }
@@ -192,14 +367,16 @@ impl ScenarioConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presets::SMALL_TOML;
+    use crate::presets::{ALL, SMALL_TOML};
 
     #[test]
-    fn small_preset_parses_and_round_trips() {
-        let cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
-        assert_eq!(cfg.name, "small");
-        let again = ScenarioConfig::from_toml_str(&cfg.to_toml_string().unwrap()).unwrap();
-        assert_eq!(cfg, again);
+    fn every_preset_parses_and_round_trips() {
+        for (name, text) in ALL {
+            let cfg = ScenarioConfig::from_toml_str(text).unwrap();
+            assert_eq!(cfg.name, *name);
+            let again = ScenarioConfig::from_toml_str(&cfg.to_toml_string().unwrap()).unwrap();
+            assert_eq!(cfg, again);
+        }
     }
 
     #[test]
@@ -229,7 +406,33 @@ mod tests {
         let zero = SMALL_TOML.replace("drop_ticks = 2", "drop_ticks = 0");
         assert_eq!(
             ScenarioConfig::from_toml_str(&zero),
-            Err(ConfigError::ZeroDuration("drop_ticks"))
+            Err(ConfigError::ZeroDuration("timing.drop_ticks"))
         );
+        let cost = SMALL_TOML.replace("against_flow_cost = 3", "against_flow_cost = 0");
+        assert!(matches!(
+            ScenarioConfig::from_toml_str(&cost),
+            Err(ConfigError::OutOfRange {
+                field: "guidance.against_flow_cost",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn new_sections_default_when_omitted() {
+        // A V0-era scenario (no chutes/scanner/guidance/planner sections and
+        // no destination mix) still loads, with the documented defaults.
+        let v0 = "name = \"v0\"\nseed = 1\n\
+                  [floor]\nwidth = 20\nheight = 20\nstations = 2\nsouth_margin = 3\n\
+                  [fleet]\nrobots = 4\n\
+                  [arrivals]\nparcels_per_hour_per_station = 100\n\
+                  [timing]\nload_ticks = 2\ndrop_ticks = 1\n";
+        let cfg = ScenarioConfig::from_toml_str(v0).unwrap();
+        assert_eq!(cfg.chutes, ChuteConfig::default());
+        assert_eq!(cfg.guidance, GuidanceConfig::default());
+        assert_eq!(cfg.planner, PlannerConfig::default());
+        assert_eq!(cfg.scanner.error_rate_ppm, 0);
+        assert_eq!(cfg.arrivals.destinations, None);
+        assert_eq!(cfg.arrivals.zipf_s_milli, 0);
     }
 }

@@ -16,3 +16,6 @@ rand_core.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
