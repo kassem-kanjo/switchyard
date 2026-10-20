@@ -1,10 +1,17 @@
 import { CellKind, RobotState, type LayoutView, type SnapshotView } from "../renderer/Renderer";
+import type { SimStats } from "./protocol";
 
-/** Narrow seam; a WASM/Worker-backed source will implement this later. */
+/**
+ * Narrow seam between the viewer and a simulation. `step` may be async (the
+ * WASM source runs in a worker); the other methods synchronously read the
+ * latest known state, so the render loop never blocks on the worker.
+ */
 export interface SimSource {
   layout(): LayoutView;
-  step(n: number): void;
+  step(n: number): void | Promise<void>;
   snapshot(): SnapshotView;
+  stats(): SimStats;
+  dispose?(): void;
 }
 
 /** Small deterministic PRNG (mulberry32). */
@@ -103,5 +110,18 @@ export class MockSource implements SimSource {
 
   snapshot(): SnapshotView {
     return { tick: this.tick, robotXY: this.xy, robotState: this.state };
+  }
+
+  /** The mock delivers nothing; counters stay zero. */
+  stats(): SimStats {
+    return {
+      tick: this.tick,
+      arrived: 0,
+      queued: 0,
+      in_flight: 0,
+      delivered: 0,
+      mis_sorted: 0,
+      throughput_per_hour_milli: 0,
+    };
   }
 }

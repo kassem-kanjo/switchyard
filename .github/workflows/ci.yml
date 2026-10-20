@@ -56,3 +56,40 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p switchyard-wasm --target wasm32-unknown-unknown
+
+  viewer:
+    name: viewer (typecheck, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+      # The CLI version must match wasm-bindgen in Cargo.lock.
+      - name: Cache wasm-bindgen-cli
+        id: wbg-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-cli-0.2.129-${{ runner.os }}
+      - name: Install wasm-bindgen-cli
+        if: steps.wbg-cache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Install dependencies
+        working-directory: viewer
+        run: npm ci
+      - name: Typecheck
+        working-directory: viewer
+        run: npm run typecheck
+      - name: Test
+        working-directory: viewer
+        run: npm test
+      - name: Build (includes the WASM build)
+        working-directory: viewer
+        run: npm run build
