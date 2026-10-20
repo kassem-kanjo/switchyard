@@ -32,8 +32,15 @@ impl StreamId {
         Self(0x0002_0000 | station as u64)
     }
 
-    /// The planner's escape moves.
+    /// The V0 planner's escape moves. Unused since guided PIBT (which needs
+    /// no randomness), but the id stays reserved so it is never reused.
     pub const PLANNER: Self = Self(0x0003_0000);
+
+    /// Scanner misreads at one station.
+    #[must_use]
+    pub const fn scanner(station: u16) -> Self {
+        Self(0x0004_0000 | station as u64)
+    }
 }
 
 /// A deterministic random stream (a thin wrapper, so the rest of the core
@@ -79,6 +86,28 @@ impl Stream {
     /// True with probability `numerator / denominator`, using integers only.
     pub fn chance(&mut self, numerator: u64, denominator: u64) -> bool {
         self.below(denominator) < numerator
+    }
+
+    /// The `index`-th `u64` of the stream, by seeking to it: a
+    /// counter-based draw. Keying a draw on an entity (for example "parcel
+    /// `k` at station `s`") makes its value independent of how many other
+    /// draws happened before it, so a surge, an outage or a different scanner
+    /// rate never shifts the draws of unrelated parcels (ADR 0002 §3, ADR 0005).
+    /// It moves the stream's position, so a stream should be used either
+    /// sequentially or keyed, not both.
+    pub fn keyed_u64(&mut self, index: u64) -> u64 {
+        // One u64 is two 32-bit words.
+        self.rng.set_word_pos(u128::from(index) << 1);
+        self.rng.next_u64()
+    }
+
+    /// A keyed value in `0..n` (`n > 0`), by Lemire's multiply-high
+    /// reduction: one draw, no rejection loop (which would consume a
+    /// variable number of draws). The bias is below `n / 2^64`.
+    pub fn keyed_below(&mut self, index: u64, n: u64) -> u64 {
+        let wide = u128::from(self.keyed_u64(index)) * u128::from(n);
+        // The high half of a u64 x u64 product fits in u64.
+        u64::try_from(wide >> 64).unwrap_or(u64::MAX)
     }
 
     /// Position of the stream (in 32-bit words). It is part of the state hash,

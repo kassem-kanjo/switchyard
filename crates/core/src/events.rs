@@ -6,8 +6,8 @@
 //! fixed phase order documented in [`crate::sim`], and within a phase in id
 //! order, so the stream itself is deterministic (ADR 0002).
 //!
-//! Variants marked *(CP1)* or *(CP2)* are part of the schema now so that
-//! consumers can be written against it, but V0 never emits them.
+//! Variants marked *(CP2)* are part of the schema now so that consumers can
+//! be written against it, but the sim does not emit them yet.
 
 use crate::Tick;
 use crate::ids::{ChuteId, DestinationId, FaultId, ParcelId, RobotId, StationId};
@@ -18,13 +18,16 @@ use crate::world::{Phase, RobotState};
 pub enum WaitCause {
     /// Another robot holds the next cell.
     BlockedBy(RobotId),
-    /// The robot lost a priority conflict to another robot *(CP1, PIBT)*.
+    /// The robot lost a priority conflict to another robot: it gave way to a
+    /// higher-priority robot that pushed it, or that robot took the cell it
+    /// wanted (PIBT, see [`crate::pibt`]).
     Yielded(RobotId),
     /// An aisle block or a dead robot is in the way *(CP2)*.
     CellBlocked(FaultId),
-    /// The chute is full, swapping bags or jammed *(CP1/CP2)*.
+    /// The robot is at its chute but the chute is swapping bags (or, from
+    /// CP2, jammed).
     ChuteUnavailable(ChuteId),
-    /// The station is busy loading another robot.
+    /// The station the robot is heading to is busy loading another robot.
     StationBusy(StationId),
 }
 
@@ -33,9 +36,10 @@ pub enum WaitCause {
 pub enum ChuteState {
     /// Accepting parcels.
     Open,
-    /// The bag is full and waiting for a swap *(CP1)*.
+    /// The bag is full and waiting for a swap. Not used yet: a swap starts
+    /// as soon as the bag fills, so chutes go straight to `Swapping`.
     Full,
-    /// A bag swap is in progress *(CP1)*.
+    /// A bag swap is in progress; the chute accepts nothing.
     Swapping,
     /// Jammed by a fault *(CP2)*.
     Jammed,
@@ -85,9 +89,16 @@ pub enum Event {
         /// Its new state.
         state: RobotState,
     },
-    /// A robot that wanted to move this tick did not. `direct` is the
-    /// immediate cause; `root` is the end of the wait-for chain. V0 sets
-    /// `root = direct`; CP2 walks the wait-for graph (ARCHITECTURE §4).
+    /// A robot with work (heading to a station or a chute) did not get
+    /// closer to its goal this tick. `direct` is the immediate cause; `root`
+    /// is the end of the wait-for chain. CP1 sets `root = direct`; CP2 walks
+    /// the chain inside the sim (ARCHITECTURE §4). These events are the
+    /// tick's wait-for graph *restricted to robots with work*: a
+    /// `BlockedBy(b)` may point at an idle or parking robot that has no event
+    /// of its own. The complete graph, through which every chain can be
+    /// walked to its root, is `Sim::wait_for()`; that is what CP2's root walk
+    /// uses, so `root` will be exact even though the stream omits idle
+    /// robots.
     RobotWaited {
         /// When.
         tick: Tick,
@@ -110,7 +121,7 @@ pub enum Event {
         chute: ChuteId,
     },
     /// A parcel went into a chute that does not serve its destination
-    /// *(CP2, scanner-drift fault)*.
+    /// (a scanner misread at induction). Follows its `ParcelDropped`.
     ParcelMisSorted {
         /// When.
         tick: Tick,
@@ -131,6 +142,29 @@ pub enum Event {
         fill: u32,
         /// Its state.
         state: ChuteState,
+    },
+    /// The watchdog fired: robots have work, but none has made progress
+    /// since `since` (a deadlock, livelock or a floor starved by unavailable
+    /// chutes). Emitted once per `planner.watchdog_ticks` of stall, so the
+    /// stall is visible instead of silent (ADR 0003, robustness).
+    Stalled {
+        /// When.
+        tick: Tick,
+        /// The last tick on which any robot made progress.
+        since: Tick,
+    },
+    /// The per-robot watchdog fired: a robot with work recorded a wait cause
+    /// on `waited` consecutive ticks (`planner.watchdog_ticks`). Emitted
+    /// once per episode: the robot must progress before it can fire again.
+    /// This catches local deadlocks and livelocks that the floor-wide
+    /// `Stalled` misses while the rest of the floor keeps sorting.
+    RobotStalled {
+        /// When.
+        tick: Tick,
+        /// The stuck robot.
+        robot: RobotId,
+        /// Consecutive ticks it has waited.
+        waited: u32,
     },
     /// A scheduled fault became active *(CP2)*.
     FaultStarted {
@@ -161,6 +195,8 @@ impl Event {
             | Self::ParcelDropped { tick, .. }
             | Self::ParcelMisSorted { tick, .. }
             | Self::ChuteChanged { tick, .. }
+            | Self::Stalled { tick, .. }
+            | Self::RobotStalled { tick, .. }
             | Self::FaultStarted { tick, .. }
             | Self::FaultEnded { tick, .. } => tick,
         }

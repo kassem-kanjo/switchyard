@@ -20,12 +20,16 @@
 //! assert_eq!(sim.tick(), 100);
 //! ```
 
+pub mod arrivals;
 pub mod config;
 pub mod events;
+pub mod fixed;
 pub mod grid;
+pub mod guidance;
 pub mod hash;
 pub mod ids;
 pub mod layout;
+pub mod pibt;
 pub mod planner;
 pub mod presets;
 pub mod rng;

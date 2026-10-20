@@ -55,6 +55,11 @@ export class Canvas2DRenderer implements Renderer {
       const y = fit.offsetY + snap.robotXY[2 * i + 1]! * fit.scale + inset;
       ctx.fillStyle = th.robotState[snap.robotState[i]!] ?? th.robotState[0];
       ctx.fillRect(x, y, size, size);
+      if (snap.robotState[i] === 0) {
+        ctx.strokeStyle = th.idleOutline;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x - 0.75, y - 0.75, size + 1.5, size + 1.5);
+      }
       if (this.highlighted.has(i)) {
         ctx.strokeStyle = th.highlight;
         ctx.lineWidth = 2;

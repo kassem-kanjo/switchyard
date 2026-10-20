@@ -32,6 +32,9 @@ rand_core = { version = "0.9", default-features = false }
 # dlltool on the windows-gnu toolchain (see ARCHITECTURE §9).
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 wasm-bindgen = "0.2"
+# Property tests (dev only). No default features: "fork"/"timeout" pull in
+# process-spawning helpers we do not need.
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -45,4 +48,7 @@ dbg_macro = "warn"
 todo = "warn"
 
 [profile.release]
+# Keep overflow checks in release so the sim behaves identically in debug and
+# release builds (determinism contract, ADR 0002).
+overflow-checks = true
 debug = 1

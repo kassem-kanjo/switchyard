@@ -43,7 +43,7 @@ exporters           resilience, counterfactual
 | `crates/cli` (`switchyard` binary) | `run`, `chaos`, `postmortem`, `export`; parallel replays with rayon | all crates |
 | `crates/wasm` (`switchyard-wasm`) | wasm-bindgen facade: create sim, step, flat snapshot buffers, fault injection, trace and metrics queries | core, trace, analysis |
 | `viewer/` | TypeScript + Vite web app. The sim runs in a Web Worker; the UI draws through a `Renderer` interface (Canvas 2D in V1) | wasm package |
-| `scenarios/` | TOML scenario presets (`small`, `medium`, `large`), calibrated to industry ranges | — |
+| `crates/core/scenarios/` | TOML scenario presets (`small`, `medium`, `large`), calibrated to industry ranges; embedded in the core. `scenarios/` at the root holds identical copies for the CLI (a test keeps them in sync) | — |
 
 ## 3. Domain model (core)
 
@@ -51,7 +51,9 @@ exporters           resilience, counterfactual
 
 **Cells.** `Free`, `Chute(id)` (a hole robots drop into from an adjacent cell; not traversable), `Induction(id)` (a loading cell on the floor edge), `Wall`.
 
-**Guidance.** Each directed edge between free cells has an integer cost. The default layout alternates one-way-preferred lanes (preferred direction cost 1, against-flow cost `k`, default 3), like Manhattan streets. Distances to every goal are precomputed with Dijkstra on this weighted graph; PIBT ranks candidate moves by them. See ADR 0003.
+**Guidance.** Each directed edge between free cells has an integer cost. The default layout alternates one-way-preferred lanes by row and by column (even rows run east, odd rows west; even columns run south, odd columns north; with-flow cost 1, against-flow cost `k`, default 3), like Manhattan streets; each two-cell aisle carries one lane each way. Distances to every goal (each station, each chute's access cells, the parking lane) are precomputed with Dijkstra on this weighted graph into one dense table; PIBT ranks candidate moves by `edge cost + distance`. See ADR 0003 and `guidance.rs`.
+
+**Throttling.** A station accepts at most `fleet.max_inbound_per_station` inbound robots (default 6); idle robots the stations cannot use drive to the perimeter parking lane (row 1 and the outer columns), out of the sort field.
 
 **Entities** are stored as struct-of-arrays and indexed by dense ids:
 - `Robot`: position, state (`Idle | ToInduction | Loading | ToChute | Dropping | Failed`), carried parcel, current goal.
@@ -86,7 +88,18 @@ When PIBT leaves a robot short of progress, the planner records **why**:
 - `ChuteUnavailable(chute)`: the chute is full, swapping bags or jammed.
 - `StationBusy(station)`
 
-Each tick, these edges form a **wait-for graph**. `causality.rs` walks each chain to its **root** (a fault, an unavailable chute, a busy station, or a cycle) and emits `RobotWaited { robot, direct, root }`. Blocked time on a parcel's trace is charged to both. This is the robot-floor equivalent of lock-wait attribution in databases. See [reliability research §a](research/2026-10-19-reliability-methods.md).
+A cause is recorded for every movable robot that does not get closer to its goal, and for every robot (idle and parked ones included) that another robot tried to push and that could not move. `BlockedBy(b)` always names a robot that stayed put this tick; `Yielded(b)` one that moved. Each tick, these edges form a **wait-for graph**, kept in full in `Sim::wait_for()`; `RobotWaited` events carry only the edges of robots with work (heading to a station or a chute), since idle robots delay no parcel on their own.
+
+A walk follows `BlockedBy`/`Yielded` edges until it reaches a **terminal root**:
+- a robot that is loading or dropping (fixed for a few ticks);
+- `ChuteUnavailable(chute)`: a robot at its chute that cannot drop (bag swap; from CP2, a jam);
+- `StationBusy(station)`: blocked by the robot *loading* at that station (a robot stuck on the station cell after loading is an ordinary `BlockedBy` edge, and the walk continues);
+- `CellBlocked(fault)` (CP2);
+- a robot that `Yielded` to: it won the cell and moved on;
+- a settled robot with no cause: at its goal, or idle and never pushed;
+- a cycle (a head-on deadlock shows up as a `BlockedBy` 2-cycle).
+
+In CP2, `causality.rs` walks each chain to its root and fills `RobotWaited { robot, direct, root }`. Blocked time on a parcel's trace is charged to both. Watchdogs emit `Stalled` when robots have work but none has progressed for `planner.watchdog_ticks`, and `RobotStalled` (once per episode) when one robot with work has waited that long; bag swaps must be shorter than that window. Random draws are keyed per parcel (`(station, ordinal)`), so a surge, an outage or scanner drift changes only the parcels it touches. This is the robot-floor equivalent of lock-wait attribution in databases. See [reliability research §a](research/2026-10-19-reliability-methods.md).
 
 ## 5. Events: the core's only output
 

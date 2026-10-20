@@ -1,0 +1,50 @@
+# Switchyard scenario: large hub.
+#
+# Calibration (docs/research/2026-10-19-industry-and-client.md, section 4):
+# large hubs reach about 11,000 parcels/h with 300-450 robots (THG/Libiao,
+# 430 robots); this preset pushes to 500 robots as the stress and benchmark
+# tier, still at 25-50 parcels/h per robot. These defaults are
+# vendor-claimed, range-calibrated, not measured.
+#
+# Units: 1 tick = 0.5 s, 1 cell = 1 m. Every field is an integer (ADR 0002).
+# Source of truth: crates/core/scenarios/ (embedded by switchyard-core);
+# the copy in the repository's scenarios/ directory must match it.
+
+name = "large"
+seed = 1
+
+[floor]
+# 88 x 72 cells: a 28 x 21 chute lattice (588 chutes).
+width = 88
+height = 72
+stations = 20
+south_margin = 6
+
+[fleet]
+robots = 500
+# Robots that may head to (or load at) one station at once.
+max_inbound_per_station = 6
+
+[arrivals]
+# 20 stations x 800/h = 16,000 parcels/h offered (32 per robot per hour).
+parcels_per_hour_per_station = 800
+destinations = 588
+zipf_s_milli = 800
+
+[timing]
+load_ticks = 4
+drop_ticks = 2
+
+[chutes]
+bag_capacity = 50
+bag_swap_ticks = 60
+mapping = "popularity_near_induction"
+
+[scanner]
+error_rate_ppm = 0
+
+[guidance]
+against_flow_cost = 3
+
+[planner]
+watchdog_ticks = 600

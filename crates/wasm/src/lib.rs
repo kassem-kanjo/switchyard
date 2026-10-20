@@ -23,7 +23,7 @@
 use switchyard_core::config::ScenarioConfig;
 use switchyard_core::events::Event;
 use switchyard_core::grid::Cell;
-use switchyard_core::presets::SMALL_TOML;
+use switchyard_core::presets;
 use switchyard_core::sim::{Sim, Snapshot};
 use switchyard_core::world::RobotState;
 use wasm_bindgen::prelude::{JsError, wasm_bindgen};
@@ -65,10 +65,7 @@ fn build(toml: &str) -> Result<Sim, String> {
 }
 
 fn preset_toml(name: &str) -> Result<&'static str, String> {
-    match name {
-        "small" => Ok(SMALL_TOML),
-        other => Err(format!("unknown preset `{other}`")),
-    }
+    presets::by_name(name).ok_or_else(|| format!("unknown preset `{name}`"))
 }
 
 /// A running simulation owned by the viewer's worker.
@@ -108,7 +105,7 @@ impl WasmSim {
             .map_err(|e| JsError::new(&e))
     }
 
-    /// Build from a built-in preset (`"small"`).
+    /// Build from a built-in preset (`"small"`, `"medium"` or `"large"`).
     ///
     /// # Errors
     /// A JS error for an unknown preset name.
@@ -249,6 +246,13 @@ mod tests {
         assert_eq!(w.robot_xy().len(), 2 * w.robot_state().len());
         assert_eq!(w.state_hash_hex().len(), 16);
         assert!(w.stats_json().starts_with("{\"tick\":50,"));
+    }
+
+    #[test]
+    fn every_preset_builds() {
+        for name in ["small", "medium", "large"] {
+            assert!(build(preset_toml(name).unwrap()).is_ok(), "{name}");
+        }
     }
 
     #[test]

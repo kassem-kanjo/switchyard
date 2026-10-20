@@ -6,6 +6,8 @@
 # vendor-claimed, range-calibrated, not measured.
 #
 # Units: 1 tick = 0.5 s, 1 cell = 1 m. Every field is an integer (ADR 0002).
+# Source of truth: crates/core/scenarios/ (embedded by switchyard-core);
+# the copy in the repository's scenarios/ directory must match it.
 
 name = "small"
 seed = 1
@@ -22,13 +24,39 @@ south_margin = 6
 
 [fleet]
 robots = 40
+# Robots that may head to (or load at) one station at once.
+max_inbound_per_station = 6
 
 [arrivals]
-# 4 stations x 400/h = 1,600 parcels/h offered (40 per robot per hour).
+# Poisson arrivals: 4 stations x 400/h = 1,600 parcels/h offered
+# (40 per robot per hour).
 parcels_per_hour_per_station = 400
+# One destination per chute (omit to default to the chute count).
+destinations = 90
+# Zipf popularity skew s = 0.8: a few destinations carry most of the volume.
+zipf_s_milli = 800
 
 [timing]
 # Manual scan-and-place at induction: 6 ticks = 3 s.
 load_ticks = 6
 # Tilt-tray drop into the chute: 2 ticks = 1 s.
 drop_ticks = 2
+
+[chutes]
+# A 50-parcel bag, swapped in 30 s.
+bag_capacity = 50
+bag_swap_ticks = 60
+# "round_robin" or "popularity_near_induction".
+mapping = "round_robin"
+
+[scanner]
+# Misreads per million scans (0 = perfect scanner).
+error_rate_ppm = 0
+
+[guidance]
+# One-way-preferred lanes: with-flow moves cost 1, against-flow moves cost 3.
+against_flow_cost = 3
+
+[planner]
+# Emit a Stalled event if no robot progresses for 5 simulated minutes.
+watchdog_ticks = 600
