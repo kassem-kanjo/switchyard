@@ -1,0 +1,19 @@
+[package]
+name = "switchyard-wasm"
+description = "wasm-bindgen facade over the Switchyard core for the browser viewer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+switchyard-core.workspace = true
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

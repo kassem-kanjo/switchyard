@@ -1,0 +1,20 @@
+[package]
+name = "switchyard-cli"
+description = "Command-line interface for the Switchyard sortation-floor simulator."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "switchyard"
+path = "src/main.rs"
+
+[dependencies]
+switchyard-core.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

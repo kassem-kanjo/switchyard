@@ -1,0 +1,6 @@
+# The host triple is deliberately not pinned: CI runs on Linux, Windows and
+# macOS, and the Windows dev box uses the GNU toolchain (no MSVC).
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]

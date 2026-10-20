@@ -1,0 +1,7 @@
+# ADR 0002 (determinism contract): hashed collections iterate in an order that
+# depends on a per-process random seed, which would make the sim's output vary
+# between runs and platforms. Use Vec with dense ids, or BTreeMap/BTreeSet.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "non-deterministic iteration order (ADR 0002); use Vec with dense ids or BTreeMap" },
+    { path = "std::collections::HashSet", reason = "non-deterministic iteration order (ADR 0002); use Vec<bool> with dense ids or BTreeSet" },
+]
