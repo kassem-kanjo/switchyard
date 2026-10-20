@@ -3,7 +3,7 @@
 **Product:** Switchyard · **Industry:** logistics · **Thesis:** A sortation hub is a distributed system. Observability, chaos engineering and automatic post-mortems for robotic parcel sortation.
 
 ## Before you do anything
-1. The company handbook lives in the sibling repo `studio-hq` (private, `kassem-kanjo/studio-hq`). Read its `CLAUDE.md` first: persona, process, org and model-selection rules apply here.
+1. Use the skills `studio-operating-model` (how we work: hierarchy, model choice, version gates, Git) and `portfolio-studio` (thesis and cross-project context). They live in `~/.claude/skills`, a clone of `kassem-kanjo/claude-skills`; if they're missing, clone that repo first.
 2. Read `docs/STATUS.md` in this repo: the current phase, what's in flight, what's next.
 3. Then read only what your task needs: `docs/PRODUCT.md` (spec), `docs/ARCHITECTURE.md`, `docs/adr/`, `docs/research/`.
 
@@ -18,5 +18,5 @@
 | `docs/checkpoints/` | Checkpoint gate reports (visual, code, tests) |
 
 ## Rules
-- Product-grade material only. Company or planning material goes in `studio-hq`.
+- Product-grade material only. Company or planning material goes in the `portfolio-studio` skill, never here.
 - Branch, open a PR, keep CI green, push at the end of every session.
