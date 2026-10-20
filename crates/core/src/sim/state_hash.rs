@@ -7,7 +7,8 @@ use crate::world::Goal;
 impl Sim {
     /// FNV-1a hash of a canonical encoding of the complete sim state: tick,
     /// every entity column in id order, counters and the position of every
-    /// random stream (ADR 0002 §5). Equal hashes across platforms and between
+    /// random stream (ADR 0002 §5), plus the fault schedule and the state of
+    /// active faults when there is a schedule. Equal hashes across platforms and between
     /// native and WASM are the determinism check.
     #[must_use]
     pub fn state_hash(&self) -> u64 {
@@ -92,6 +93,11 @@ impl Sim {
         }
         h.write_u32(self.scanner_ppm);
         self.planner.hash_state(&mut h);
+        // Faults are opt-in: a run without a schedule hashes exactly as
+        // before faults existed, so healthy reference hashes stay valid.
+        if !self.faults.is_empty() {
+            self.hash_faults(&mut h);
+        }
         h.finish()
     }
 }

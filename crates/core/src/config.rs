@@ -14,6 +14,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::TICKS_PER_HOUR;
+use crate::faults::FaultSpec;
 
 /// A complete, self-contained description of one simulation scenario.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +44,11 @@ pub struct ScenarioConfig {
     /// Planner safety nets.
     #[serde(default)]
     pub planner: PlannerConfig,
+    /// The fault schedule (`[[faults]]`), empty for a healthy run. Faults are
+    /// opt-in: a scenario without them simulates exactly as before. See
+    /// [`crate::faults`] for the kinds and their healthy counterparts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faults: Vec<FaultSpec>,
 }
 
 /// Floor geometry, consumed by [`crate::layout::generate`].
@@ -187,13 +193,20 @@ pub struct PlannerConfig {
     /// the sim emits `Event::Stalled` (a deadlock or livelock) instead of
     /// silently going quiet (ADR 0003, robustness).
     pub watchdog_ticks: u32,
+    /// A wait-for cycle must persist this many consecutive ticks before the
+    /// sim reports it as a deadlock (`Event::DeadlockDetected`). PIBT clears
+    /// most head-on meetings within a tick or two, so a short persistence
+    /// requirement filters out those transient 2-cycles.
+    pub deadlock_ticks: u32,
 }
 
 impl Default for PlannerConfig {
     fn default() -> Self {
-        // 5 simulated minutes: longer than any legitimate wait (a bag swap).
         Self {
+            // 5 simulated minutes: longer than any legitimate wait (a bag swap).
             watchdog_ticks: 600,
+            // 5 simulated seconds.
+            deadlock_ticks: 10,
         }
     }
 }
@@ -247,6 +260,10 @@ pub enum ConfigError {
     /// The generated layout broke an invariant (a station or chute is
     /// unreachable). This is a generator bug or a degenerate floor.
     Unreachable(String),
+    /// A fault in the schedule is invalid (unknown robot, chute or station,
+    /// a blocked cell that is not open floor, a factor out of range, or a
+    /// start tick in the past).
+    BadFault(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -278,6 +295,7 @@ impl fmt::Display for ConfigError {
                 max,
             } => write!(f, "{field} = {value} is outside {min}..={max}"),
             Self::Unreachable(msg) => write!(f, "layout is not fully connected: {msg}"),
+            Self::BadFault(msg) => write!(f, "invalid fault: {msg}"),
         }
     }
 }
@@ -339,6 +357,7 @@ impl ScenarioConfig {
             ("timing.drop_ticks", u32::from(self.timing.drop_ticks)),
             ("chutes.bag_swap_ticks", self.chutes.bag_swap_ticks),
             ("planner.watchdog_ticks", self.planner.watchdog_ticks),
+            ("planner.deadlock_ticks", self.planner.deadlock_ticks),
         ];
         if let Some((field, _)) = durations.iter().find(|(_, v)| *v == 0) {
             return Err(ConfigError::ZeroDuration(field));
@@ -391,7 +410,23 @@ impl ScenarioConfig {
                 });
             }
         }
+        for fault in &self.faults {
+            fault.validate()?;
+        }
         Ok(())
+    }
+
+    /// The same scenario with fault `index` removed from the schedule: the
+    /// counterfactual intervention `do(fault := healthy)` (ADR 0005; see
+    /// [`crate::faults`] for each kind's healthy counterpart). Later faults
+    /// move down one index. Out-of-range indices leave the schedule as is.
+    #[must_use]
+    pub fn without_fault(&self, index: usize) -> Self {
+        let mut cfg = self.clone();
+        if index < cfg.faults.len() {
+            cfg.faults.remove(index);
+        }
+        cfg
     }
 }
 

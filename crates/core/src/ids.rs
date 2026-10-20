@@ -7,10 +7,15 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 macro_rules! dense_id {
     ($(#[$meta:meta])* $name:ident($repr:ty), $prefix:literal) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(
+            Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
+        #[serde(transparent)]
         #[repr(transparent)]
         pub struct $name(pub $repr);
 
@@ -58,7 +63,8 @@ dense_id!(
     "D"
 );
 dense_id!(
-    /// An entry in the fault schedule (faults arrive in CP2).
+    /// An entry in the fault schedule: its index in the scenario's
+    /// `[[faults]]` list, then in [`crate::sim::Sim::schedule_fault`] order.
     FaultId(u32),
     "F"
 );

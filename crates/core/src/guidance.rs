@@ -89,9 +89,31 @@ impl DistanceTables {
     /// (1 disables guidance; see the module docs).
     #[must_use]
     pub fn build(layout: &Layout, against_flow_cost: u32) -> Self {
+        Self::build_with_closed(layout, against_flow_cost, &[])
+    }
+
+    /// Build the tables with some cells closed to traffic (an aisle block or
+    /// a dead robot, [`crate::faults`]): no edge enters a closed cell, so
+    /// every route goes around it, and goals that can only be reached
+    /// through closed cells become [`UNREACHABLE`]. Edges *out of* a closed
+    /// cell remain, so a robot caught inside can leave. `closed` is indexed
+    /// by cell; an empty slice closes nothing (the same tables as
+    /// [`DistanceTables::build`]).
+    #[must_use]
+    pub fn build_with_closed(layout: &Layout, against_flow_cost: u32, closed: &[bool]) -> Self {
         let g = &layout.grid;
         let cells = g.len();
-        let edge = edge_costs(layout, against_flow_cost);
+        let mut edge = edge_costs(layout, against_flow_cost);
+        if !closed.is_empty() {
+            for (from, costs) in edge.iter_mut().enumerate() {
+                let from = u32::try_from(from).unwrap_or(u32::MAX);
+                for (dir, cost) in costs.iter_mut().enumerate() {
+                    if step(g, from, dir).is_some_and(|to| closed[to as usize]) {
+                        *cost = 0;
+                    }
+                }
+            }
+        }
         let stations = layout.stations.len();
         let chutes = layout.chutes.len();
         let goals = stations + chutes + 1;
@@ -352,6 +374,39 @@ mod tests {
                 assert_eq!(best, Some(dist), "{goal:?} at {c}");
             }
         }
+    }
+
+    #[test]
+    fn closed_cells_are_routed_around_and_can_cut_a_goal_off() {
+        let l = layout();
+        let g = &l.grid;
+        let open = DistanceTables::build(&l, 3);
+        assert_eq!(DistanceTables::build_with_closed(&l, 3, &[]), open);
+
+        // Close one cell on a shortest route: nobody may step into it, but
+        // its own way out stays, and the goal is still reachable around it.
+        let goal = Goal::Chute(ChuteId(0));
+        let cell = g.idx(Pos::new(3, 2));
+        let mut closed = vec![false; g.len()];
+        closed[cell as usize] = true;
+        let d = DistanceTables::build_with_closed(&l, 3, &closed);
+        for dir in 0..4 {
+            if let Some(from) = step(g, cell, dir) {
+                assert_eq!(d.edge_cost(from, (dir + 2) % 4), 0, "edge into the block");
+            }
+        }
+        assert_eq!(d.get(goal, cell), 0, "a robot inside can still drop");
+        let above = g.idx(Pos::new(3, 1));
+        assert!(d.get(goal, above) > open.get(goal, above));
+        assert_ne!(d.get(goal, above), UNREACHABLE);
+
+        // Close every access cell of the chute: it is cut off.
+        let mut closed = vec![false; g.len()];
+        for c in l.chute_access(ChuteId(0)) {
+            closed[c as usize] = true;
+        }
+        let d = DistanceTables::build_with_closed(&l, 3, &closed);
+        assert_eq!(d.get(goal, above), UNREACHABLE);
     }
 
     #[test]

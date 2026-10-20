@@ -6,8 +6,6 @@
 //! fixed phase order documented in [`crate::sim`], and within a phase in id
 //! order, so the stream itself is deterministic (ADR 0002).
 //!
-//! Variants marked *(CP2)* are part of the schema now so that consumers can
-//! be written against it, but the sim does not emit them yet.
 
 use crate::Tick;
 use crate::ids::{ChuteId, DestinationId, FaultId, ParcelId, RobotId, StationId};
@@ -22,13 +20,21 @@ pub enum WaitCause {
     /// higher-priority robot that pushed it, or that robot took the cell it
     /// wanted (PIBT, see [`crate::pibt`]).
     Yielded(RobotId),
-    /// An aisle block or a dead robot is in the way *(CP2)*.
+    /// A fault changed the floor's topology so the robot cannot proceed: its
+    /// goal is cut off by an aisle block or a dead robot (a direct cause), or
+    /// its wait-for chain ends at a robot that failed (a root).
     CellBlocked(FaultId),
-    /// The robot is at its chute but the chute is swapping bags (or, from
-    /// CP2, jammed).
+    /// The robot is at its chute but the chute is swapping bags or jammed.
     ChuteUnavailable(ChuteId),
     /// The station the robot is heading to is busy loading another robot.
     StationBusy(StationId),
+    /// Only ever a *root*: the robot's wait-for chain ends in a cycle of
+    /// `BlockedBy` edges (robots that all stayed put, each waiting on the
+    /// next). The id is the cycle's canonical member, its lowest robot id.
+    /// A cycle that persists for `planner.deadlock_ticks` is reported as a
+    /// deadlock ([`Event::DeadlockDetected`]); shorter ones are transient
+    /// head-on meetings.
+    Cycle(RobotId),
 }
 
 /// The state of a chute, reported when it changes.
@@ -41,7 +47,8 @@ pub enum ChuteState {
     Full,
     /// A bag swap is in progress; the chute accepts nothing.
     Swapping,
-    /// Jammed by a fault *(CP2)*.
+    /// Jammed by a fault: accepts nothing, and a bag swap in progress is
+    /// paused until the jam clears.
     Jammed,
 }
 
@@ -91,14 +98,17 @@ pub enum Event {
     },
     /// A robot with work (heading to a station or a chute) did not get
     /// closer to its goal this tick. `direct` is the immediate cause; `root`
-    /// is the end of the wait-for chain. CP1 sets `root = direct`; CP2 walks
-    /// the chain inside the sim (ARCHITECTURE §4). These events are the
-    /// tick's wait-for graph *restricted to robots with work*: a
-    /// `BlockedBy(b)` may point at an idle or parking robot that has no event
-    /// of its own. The complete graph, through which every chain can be
-    /// walked to its root, is `Sim::wait_for()`; that is what CP2's root walk
-    /// uses, so `root` will be exact even though the stream omits idle
-    /// robots.
+    /// is the end of the wait-for chain, walked over the tick's complete
+    /// graph (`Sim::wait_for()`, idle and parking robots included) by
+    /// [`crate::causality`] (ARCHITECTURE §4). The events themselves are the
+    /// graph *restricted to robots with work*: a `BlockedBy(b)` may point at
+    /// an idle or parking robot that has no event of its own.
+    ///
+    /// Roots: `BlockedBy(b)` for a robot `b` with no cause of its own
+    /// (loading, dropping, at its goal, or idle); `Yielded(b)` (`b` won the
+    /// cell and moved on); `CellBlocked(f)` (an aisle block, or the chain
+    /// ends at a robot that failure `f` stopped); `ChuteUnavailable`;
+    /// `StationBusy`; or `Cycle(m)` for a chain that ends in a cycle.
     RobotWaited {
         /// When.
         tick: Tick,
@@ -166,14 +176,33 @@ pub enum Event {
         /// Consecutive ticks it has waited.
         waited: u32,
     },
-    /// A scheduled fault became active *(CP2)*.
+    /// A wait-for cycle persisted for `planner.deadlock_ticks` consecutive
+    /// ticks: a deadlock (research §2.3: a wait-for cycle iff deadlock).
+    /// Emitted once per member robot, in cycle order starting from the
+    /// canonical (lowest-id) member, and once per episode: the cycle must
+    /// break before it can be reported again. Group the events of one tick
+    /// by `cycle` to get the member set. (One event per member keeps
+    /// [`Event`] `Copy`.)
+    DeadlockDetected {
+        /// When the persistence threshold was reached.
+        tick: Tick,
+        /// A member of the cycle.
+        robot: RobotId,
+        /// The cycle's canonical member (its lowest robot id).
+        cycle: RobotId,
+        /// The first tick of the episode on which the cycle was present.
+        since: Tick,
+    },
+    /// A scheduled fault became active. Its effects (a robot entering
+    /// `Failed`, a chute `Jammed`) follow in the same tick.
     FaultStarted {
         /// When.
         tick: Tick,
         /// The schedule entry.
         fault: FaultId,
     },
-    /// A scheduled fault was cleared *(CP2)*.
+    /// A scheduled fault was cleared: its healthy counterpart is restored
+    /// (see [`crate::faults`]).
     FaultEnded {
         /// When.
         tick: Tick,
@@ -197,6 +226,7 @@ impl Event {
             | Self::ChuteChanged { tick, .. }
             | Self::Stalled { tick, .. }
             | Self::RobotStalled { tick, .. }
+            | Self::DeadlockDetected { tick, .. }
             | Self::FaultStarted { tick, .. }
             | Self::FaultEnded { tick, .. } => tick,
         }
