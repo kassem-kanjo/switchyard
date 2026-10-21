@@ -9,7 +9,12 @@ interface WasmModule {
   WasmSim: { with_preset(name: string): WasmSimApi };
 }
 
+/** Attach the chart series to a snapshot at most this often (sim ticks): 30 s of sim time. */
+const SERIES_EVERY_TICKS = 60;
+
 let sim: WasmSimApi | null = null;
+/** Tick of the last series sent; null forces the next snapshot to carry one. */
+let lastSeriesTick: number | null = null;
 
 function post(msg: WorkerResponse, transfer: Transferable[] = []): void {
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
@@ -17,6 +22,29 @@ function post(msg: WorkerResponse, transfer: Transferable[] = []): void {
 
 function stats(s: WasmSimApi): SimStats {
   return JSON.parse(s.stats_json()) as SimStats;
+}
+
+function rpc(s: WasmSimApi, req: Extract<WorkerRequest, { type: "rpc" }>): string {
+  const n = Number(req.arg);
+  switch (req.method) {
+    case "metrics_json":
+      return s.metrics_json();
+    case "trace_json":
+      return s.trace_json(n);
+    case "parcel_of_robot":
+      return JSON.stringify(s.parcel_of_robot(n) ?? null);
+    case "fault_kinds_json":
+      return s.fault_kinds_json();
+    case "inject_fault": {
+      const reply = s.inject_fault(String(req.arg));
+      lastSeriesTick = null; // show the new fault window and the twin straight away
+      return reply;
+    }
+    case "active_faults_json":
+      return s.active_faults_json(n);
+    case "postmortem_markdown":
+      return s.postmortem_markdown();
+  }
 }
 
 async function handle(req: WorkerRequest): Promise<void> {
@@ -27,6 +55,7 @@ async function handle(req: WorkerRequest): Promise<void> {
     const mod = (await import("../wasm/pkg/switchyard_wasm.js")) as WasmModule;
     await mod.default();
     sim = mod.WasmSim.with_preset(req.preset);
+    lastSeriesTick = null;
     const cells = sim.cells();
     post({ type: "layout", width: sim.width(), height: sim.height(), cells }, [cells.buffer]);
     return;
@@ -34,25 +63,32 @@ async function handle(req: WorkerRequest): Promise<void> {
   if (!sim) throw new Error("sim not initialised");
   if (req.type === "step") {
     sim.step(req.n);
+    const tick = sim.tick();
     const robotXY = sim.robot_xy();
     const robotState = sim.robot_state();
+    const due = lastSeriesTick === null || tick - lastSeriesTick >= SERIES_EVERY_TICKS;
+    if (due) lastSeriesTick = tick;
     post(
       {
         type: "snapshot",
-        tick: sim.tick(),
+        tick,
         robotXY,
         robotState,
         stats: stats(sim),
         hash: sim.state_hash_hex(),
+        ...(due ? { series: sim.metrics_json() } : {}),
       },
       [robotXY.buffer, robotState.buffer],
     );
+  } else if (req.type === "rpc") {
+    post({ type: "rpc", result: rpc(sim, req) });
   } else {
     post({ type: "stats", stats: stats(sim) });
   }
 }
 
-// Requests are handled strictly in order.
+// Requests are handled strictly in order, and each gets exactly one response,
+// so the main thread can match responses to requests with a FIFO queue.
 let chain: Promise<void> = Promise.resolve();
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   chain = chain

@@ -1,0 +1,43 @@
+{
+  "_comment": "Shared contract between crates/wasm (Rust tests compare real output against these shapes) and viewer/src/data/types.ts (TypeScript tests type-check and parse them). Optional keys (twin, unit, blockChain) appear here so both sides know them.",
+  "metrics": {
+    "ticksPerMinute": 120,
+    "startMinute": 0,
+    "delivered": [110, 118, 95],
+    "twin": [110, 118, 117],
+    "faults": [{ "kind": "robot_failure", "startTick": 120, "endTick": 420 }]
+  },
+  "trace": {
+    "parcelId": 41,
+    "robot": 7,
+    "spans": [
+      { "phase": "queued", "startTick": 10, "endTick": 20, "directBlocker": null, "rootCause": null },
+      { "phase": "travelling", "startTick": 20, "endTick": 60, "directBlocker": null, "rootCause": null },
+      { "phase": "blocked", "startTick": 60, "endTick": 100, "directBlocker": 12, "blockChain": [3], "rootCause": "dead robot R3" }
+    ]
+  },
+  "faultKinds": [
+    {
+      "id": "volume_surge",
+      "label": "Volume surge",
+      "description": "Parcel arrivals jump above the planned rate.",
+      "params": [
+        { "key": "factor", "label": "Arrival rate", "unit": "x", "min": 1.1, "max": 10, "step": 0.1, "default": 1.5, "integer": false }
+      ]
+    },
+    {
+      "id": "chute_jam",
+      "label": "Chute jam",
+      "description": "A chute stops accepting parcels.",
+      "params": [{ "key": "chute", "label": "Chute", "min": 0, "max": 89, "step": 1, "default": 12, "integer": true }]
+    }
+  ],
+  "activeFault": {
+    "id": 0,
+    "kind": "robot_failure",
+    "params": { "robot": 7 },
+    "atTick": 120,
+    "durationTicks": 300,
+    "endTick": 420
+  }
+}
