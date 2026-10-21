@@ -15,17 +15,19 @@ cargo install wasm-bindgen-cli --version 0.2.129 --locked
 # Node 22: use your package manager or nvm
 ```
 
-## Windows without Visual Studio (GNU toolchain)
-Windows normally needs the MSVC build tools, which require an admin install. The setup below avoids that:
-1. Install rustup with the GNU host: download `rustup-init.exe` from `static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/` and run `rustup-init.exe -y --default-host x86_64-pc-windows-gnu -t wasm32-unknown-unknown`.
-2. Some crates (`windows-sys` ≥ 0.61) need `dlltool`, and a few build-time tools need a C compiler. Extract [w64devkit](https://github.com/skeeto/w64devkit) to `%LOCALAPPDATA%\Programs\w64devkit`. **Do not put its `bin` on PATH**: its `gcc` would replace Rust's bundled linker and fail with `cannot find -lgcc_eh`. Instead:
-   - copy `dlltool.exe` and `as.exe` into a folder of their own (e.g. `%LOCALAPPDATA%\Programs\mingw-dlltool\bin`) and add *that* to PATH;
-   - when a crate needs a C compiler (e.g. `ring` when installing `wasm-bindgen-cli`), set it for that command only:
-     ```bash
-     CC_x86_64_pc_windows_gnu=".../w64devkit/bin/gcc.exe" AR_x86_64_pc_windows_gnu=".../w64devkit/bin/ar.exe" \
-       cargo install wasm-bindgen-cli --version 0.2.129 --locked
-     ```
-3. Node 22: the official zip from nodejs.org, extracted to `%LOCALAPPDATA%\Programs` and added to PATH.
+## Windows (recommended: MSVC)
+1. Install the Visual Studio Build Tools with the C++ workload (needs admin, once):
+   ```powershell
+   winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+   ```
+2. Install rustup (`winget install Rustlang.Rustup`, or rustup-init.exe), then `rustup target add wasm32-unknown-unknown`.
+3. `cargo install wasm-bindgen-cli --version 0.2.129 --locked`
+4. Node 22 LTS.
+
+This matches CI (GitHub's `windows-latest` runners use MSVC).
+
+### Fallback without admin rights (GNU toolchain)
+If you can't install the Build Tools: install rustup with `--default-host x86_64-pc-windows-gnu`. Some crates (`windows-sys` ≥ 0.61) then need `dlltool`: extract [w64devkit](https://github.com/skeeto/w64devkit) and put **only** `dlltool.exe` and `as.exe` on PATH. Its `gcc` must not be on PATH, because it replaces Rust's bundled linker and fails with `-lgcc_eh`. For crates that compile C (e.g. `ring`), set `CC_x86_64_pc_windows_gnu` and `AR_x86_64_pc_windows_gnu` to w64devkit's `gcc.exe` and `ar.exe` for that command only.
 
 The product's own crates need no C compiler; keep it that way (ADR 0001).
 
@@ -39,3 +41,9 @@ cargo run --release -p switchyard-cli -- run --scenario medium --ticks 14400   #
 
 cd viewer && npm install && npm run dev      # viewer
 ```
+
+## Determinism check (CI)
+ADR 0002 promises that one scenario and seed give a bit-identical state hash everywhere. CI proves it: `determinism-native` (Linux, Windows, macOS; release CLI) and `determinism-wasm` (Node 22, `wasm-bindgen --target nodejs`) compare against `scripts/determinism/expected.txt` (`<scenario> <ticks> <seed> <hash>`; small, medium, large and the `two-dead-robots-and-a-jam` chaos scenario, which `run` supports because faults live in the scenario TOML).
+
+- Locally: `scripts/determinism/check.sh` (after `cargo build --release -p switchyard-cli`).
+- A hash change must be deliberate: run `scripts/determinism/update.sh`, commit `expected.txt`, and explain in the PR why the simulation's behaviour changed. An unexplained change is a determinism bug.
