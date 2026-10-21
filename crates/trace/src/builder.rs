@@ -11,13 +11,18 @@
 //!   change, so consecutive events never repeat a phase).
 //! - `ParcelPhase { Dropped }` completes the trace. `done` is that tick:
 //!   `Dropped` is an instant, not a span.
-//! - A `Blocked` phase is cut into sub-spans by the carrying robot's
-//!   `RobotWaited` events: consecutive ticks with the same
-//!   `(direct, root)` merge into one span. A `Blocked` tick with no
-//!   `RobotWaited` becomes a span with no blocker (unattributed).
+//! - A phase is cut into sub-spans by what the stream says about each tick.
+//!   For `Blocked`, the carrying robot's `RobotWaited` gives
+//!   `(direct, root)`; a `Blocked` tick with no `RobotWaited` is
+//!   unattributed. In **every** phase, `ParcelDelayed` gives the fault
+//!   delay `(cause, root)`. Consecutive ticks with the same annotations
+//!   merge into one span, so a `Travelling` span that a fault slowed for
+//!   twenty ticks becomes three spans (before, during, after).
 //! - A robot that fails mid-delivery changes nothing special: the parcel
-//!   stays in whatever phase the stream says, and a later `ParcelAssigned`
-//!   adds the replacement robot to the trace.
+//!   stays in whatever phase the stream says. A robot cut off from its
+//!   station by a fault is the one reassignment: its parcel goes back to
+//!   `Queued` (the builder forgets the old robot) and a later
+//!   `ParcelAssigned` adds the new one; every robot is recorded.
 //!
 //! Events of one tick are processed in two passes (state changes, then
 //! waits), so the result does not depend on the order of events within a
@@ -34,13 +39,22 @@ use crate::model::{ParcelTrace, Span, SpanAttrs, TraceStatus};
 
 type Key = (WaitCause, WaitCause);
 
-/// The `Blocked` sub-span being accumulated.
+/// What the stream says about one tick of a parcel: the blocker of a
+/// `Blocked` tick and the fault delay of any tick. Ticks with the same
+/// annotation merge into one span.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Note {
+    blocked: Option<Key>,
+    delay: Option<Key>,
+}
+
+/// The sub-span being accumulated.
 #[derive(Clone, Copy, Debug)]
 struct Run {
     start: Tick,
     /// One past the last tick accounted to this run.
     end: Tick,
-    key: Option<Key>,
+    note: Note,
 }
 
 /// State of a parcel that has not been dropped yet.
@@ -69,25 +83,27 @@ struct InFlight {
 impl InFlight {
     fn push_run(&mut self, run: Run) {
         self.spans.push(Span {
-            phase: Phase::Blocked,
+            phase: self.phase,
             start: run.start,
             end: run.end,
             attrs: SpanAttrs {
                 robot: self.phase_robot,
-                direct_blocker: run.key.map(|k| k.0),
-                root_cause: run.key.map(|k| k.1),
+                direct_blocker: run.note.blocked.map(|k| k.0),
+                root_cause: run.note.blocked.map(|k| k.1),
+                delay_cause: run.note.delay.map(|k| k.0),
+                delay_root: run.note.delay.map(|k| k.1),
             },
         });
     }
 
-    /// Account ticks `[self.next_tick, to)` to `key`, extending the open run
-    /// when the key matches.
-    fn account(&mut self, to: Tick, key: Option<Key>) {
+    /// Account ticks `[self.next_tick, to)` to `note`, extending the open
+    /// run when the note matches.
+    fn account(&mut self, to: Tick, note: Note) {
         if to <= self.next_tick {
             return;
         }
         match &mut self.run {
-            Some(run) if run.key == key && run.end == self.next_tick => run.end = to,
+            Some(run) if run.note == note && run.end == self.next_tick => run.end = to,
             _ => {
                 if let Some(run) = self.run.take() {
                     self.push_run(run);
@@ -95,7 +111,7 @@ impl InFlight {
                 self.run = Some(Run {
                     start: self.next_tick,
                     end: to,
-                    key,
+                    note,
                 });
             }
         }
@@ -104,21 +120,9 @@ impl InFlight {
 
     /// Close the current phase at tick `t`, pushing its span(s).
     fn close_phase(&mut self, t: Tick) {
-        if self.phase == Phase::Blocked {
-            self.account(t, None);
-            if let Some(run) = self.run.take() {
-                self.push_run(run);
-            }
-        } else if t > self.phase_start {
-            self.spans.push(Span {
-                phase: self.phase,
-                start: self.phase_start,
-                end: t,
-                attrs: SpanAttrs {
-                    robot: self.phase_robot,
-                    ..SpanAttrs::default()
-                },
-            });
+        self.account(t, Note::default());
+        if let Some(run) = self.run.take() {
+            self.push_run(run);
         }
     }
 
@@ -241,6 +245,13 @@ impl TraceBuilder {
                 }
                 Event::ParcelPhase { parcel, phase, .. } => {
                     if let Some(p) = self.in_flight.get_mut(&parcel) {
+                        if phase == Phase::Queued
+                            && let Some(old) = p.robot.take()
+                            && self.robot_parcel.get(&old) == Some(&parcel)
+                        {
+                            // Sent back to the queue: its robot is released.
+                            self.robot_parcel.remove(&old);
+                        }
                         if phase == Phase::Dropped {
                             if p.dropped_at.is_none() {
                                 p.close_phase(tick);
@@ -273,21 +284,44 @@ impl TraceBuilder {
                 _ => {}
             }
         }
-        // Pass 2: waits attribute the carrying parcel's blocked ticks.
+        // Pass 2: waits and delays annotate the tick. A parcel's two sources
+        // (its robot's wait, its own delay) merge into one note per tick.
+        let mut notes: BTreeMap<ParcelId, Note> = BTreeMap::new();
         for event in events {
-            if let Event::RobotWaited {
-                robot,
-                direct,
-                root,
-                ..
-            } = *event
-                && let Some(parcel) = self.robot_parcel.get(&robot)
-                && let Some(p) = self.in_flight.get_mut(parcel)
-                && p.phase == Phase::Blocked
-                && p.dropped_at.is_none()
-            {
-                p.account(tick, None);
-                p.account(tick + 1, Some((direct, root)));
+            match *event {
+                Event::RobotWaited {
+                    robot,
+                    direct,
+                    root,
+                    ..
+                } => {
+                    if let Some(&parcel) = self.robot_parcel.get(&robot)
+                        && let Some(p) = self.in_flight.get(&parcel)
+                        && p.phase == Phase::Blocked
+                        && p.dropped_at.is_none()
+                    {
+                        notes.entry(parcel).or_default().blocked = Some((direct, root));
+                    }
+                }
+                Event::ParcelDelayed {
+                    parcel,
+                    cause,
+                    root,
+                    ..
+                } => {
+                    if let Some(p) = self.in_flight.get(&parcel)
+                        && p.dropped_at.is_none()
+                    {
+                        notes.entry(parcel).or_default().delay = Some((cause, root));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (parcel, note) in notes {
+            if let Some(p) = self.in_flight.get_mut(&parcel) {
+                p.account(tick, Note::default());
+                p.account(tick + 1, note);
             }
         }
         for parcel in finished {
@@ -530,6 +564,55 @@ mod tests {
         assert!(done.is_empty());
         assert_eq!(b.open_traces(12), b.open_traces(12));
         assert_eq!(b.in_flight(), 1);
+    }
+
+    #[test]
+    fn fault_delay_splits_any_phase_and_reassignment_records_both_robots() {
+        let f = FaultId(1);
+        let delayed = |tick| Event::ParcelDelayed {
+            tick,
+            parcel: ParcelId(1),
+            cause: WaitCause::CellBlocked(f),
+            root: WaitCause::CellBlocked(f),
+        };
+        let mut ev = Vec::new();
+        ev.extend(arrive(0, 1));
+        ev.push(assign(1, 1, 4));
+        ev.push(phase(1, 1, Phase::AwaitingRobot));
+        ev.push(phase(3, 1, Phase::Loading));
+        ev.push(phase(4, 1, Phase::Travelling));
+        // Ticks 5 and 6 of the Travelling phase are fault-delayed.
+        ev.push(delayed(5));
+        ev.push(delayed(6));
+        // R4 is cut off: the parcel goes back to the queue, delayed there too.
+        ev.push(phase(8, 1, Phase::Queued));
+        ev.push(delayed(8));
+        ev.push(assign(10, 1, 9));
+        ev.push(phase(10, 1, Phase::AwaitingRobot));
+        let t = &TraceBuilder::build_all(&ev, 12)[0];
+        assert_eq!(t.robots, vec![RobotId(4), RobotId(9)]);
+        assert!(t.check_tiling().is_ok());
+        let got: Vec<_> = t
+            .spans
+            .iter()
+            .map(|s| (s.phase, s.start, s.end, s.attrs.fault(), s.attrs.robot))
+            .collect();
+        let r4 = Some(RobotId(4));
+        assert_eq!(
+            got,
+            vec![
+                (Phase::Queued, 0, 1, None, None),
+                (Phase::AwaitingRobot, 1, 3, None, r4),
+                (Phase::Loading, 3, 4, None, r4),
+                (Phase::Travelling, 4, 5, None, r4),
+                (Phase::Travelling, 5, 7, Some(f), r4),
+                (Phase::Travelling, 7, 8, None, r4),
+                // The old robot is released when the parcel is re-queued.
+                (Phase::Queued, 8, 9, Some(f), None),
+                (Phase::Queued, 9, 10, None, None),
+                (Phase::AwaitingRobot, 10, 12, None, Some(RobotId(9))),
+            ]
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use switchyard_core::Tick;
 use switchyard_core::events::WaitCause;
-use switchyard_core::ids::{ChuteId, DestinationId, ParcelId, RobotId, StationId};
+use switchyard_core::ids::{ChuteId, DestinationId, FaultId, ParcelId, RobotId, StationId};
 use switchyard_core::world::Phase;
 
 /// Extra facts about a span.
@@ -17,6 +17,21 @@ pub struct SpanAttrs {
     pub direct_blocker: Option<WaitCause>,
     /// `Blocked` spans: the end of the wait-for chain.
     pub root_cause: Option<WaitCause>,
+    /// Any phase: the immediate cause of a fault delay (the core's
+    /// `ParcelDelayed.cause`). Every tick of the span carries the same
+    /// `(delay_cause, delay_root)` pair; a span is split where it changes.
+    pub delay_cause: Option<WaitCause>,
+    /// Any phase: the root of the fault delay; always names a fault
+    /// ([`WaitCause::fault`] is `Some`).
+    pub delay_root: Option<WaitCause>,
+}
+
+impl SpanAttrs {
+    /// The fault that delayed this span, if one did: the delay root's fault.
+    #[must_use]
+    pub fn fault(&self) -> Option<FaultId> {
+        self.delay_root.and_then(WaitCause::fault)
+    }
 }
 
 /// One phase of a parcel's life: the half-open tick range `[start, end)`.
@@ -71,7 +86,11 @@ pub struct ParcelTrace {
     pub status: TraceStatus,
     /// The chute it fell into (complete traces).
     pub chute: Option<ChuteId>,
-    /// Every robot assigned to it, in order (several if a robot failed).
+    /// Every robot the sim assigned to it, in order. Usually one. A parcel
+    /// is reassigned only when its `ToInduction` robot is cut off from the
+    /// station by a fault: the robot goes idle and the parcel goes back to
+    /// `Queued` and is assigned again. A failed robot's parcel is not
+    /// reassigned (it stays with the dead robot).
     pub robots: Vec<RobotId>,
     /// It went into a chute that does not serve its destination.
     pub mis_sorted: bool,
@@ -146,7 +165,7 @@ pub const fn phase_name(phase: Phase) -> &'static str {
 /// A [`WaitCause`] split into a stable kind label and the id it names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CauseParts {
-    /// Snake-case label: `blocked_by`, `yielded`, `cell_blocked`,
+    /// Snake-case label: `blocked_by`, `yielded`, `cell_blocked`, `fault`,
     /// `chute_unavailable`, `station_busy` or `cycle` (a deadlock cycle,
     /// named by its lowest robot id).
     pub kind: &'static str,
@@ -175,6 +194,11 @@ pub fn cause_parts(cause: WaitCause) -> CauseParts {
             id: f.0,
             robot: None,
         },
+        WaitCause::Fault(f) => CauseParts {
+            kind: "fault",
+            id: f.0,
+            robot: None,
+        },
         WaitCause::ChuteUnavailable(c) => CauseParts {
             kind: "chute_unavailable",
             id: u32::from(c.0),
@@ -199,6 +223,7 @@ pub(crate) fn cause_label(cause: WaitCause) -> String {
         WaitCause::BlockedBy(r) => format!("blocked_by:{r}"),
         WaitCause::Yielded(r) => format!("yielded:{r}"),
         WaitCause::CellBlocked(f) => format!("cell_blocked:{f}"),
+        WaitCause::Fault(f) => format!("fault:{f}"),
         WaitCause::ChuteUnavailable(c) => format!("chute_unavailable:{c}"),
         WaitCause::StationBusy(s) => format!("station_busy:{s}"),
         WaitCause::Cycle(r) => format!("cycle:{r}"),

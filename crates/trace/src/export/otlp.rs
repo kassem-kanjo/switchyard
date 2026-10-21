@@ -2,9 +2,12 @@
 //!
 //! Mapping, chosen so the file reads naturally in Jaeger-like tools:
 //!
-//! - One **trace per parcel**. The trace id is derived from the parcel id
-//!   alone and the span ids from `(parcel id, span index)`, so exporting the
-//!   same run twice gives identical bytes.
+//! - One **trace per parcel**. The trace id is derived from
+//!   [`OtlpOptions::run_id`] and the parcel id, the span ids from
+//!   `(run id, parcel id, span index)`. Exporting the same run twice gives
+//!   identical bytes; different runs (scenario, seed or variant, see
+//!   [`run_id`](super::run_id)) never share ids, so they can sit side by side
+//!   in one collector.
 //! - A root span `parcel` covers `[arrival, done)`; each phase span is its
 //!   child. Phase spans tile the root exactly.
 //! - A `Blocked` span carries **links** to the work of the robot that held
@@ -30,7 +33,7 @@ use switchyard_core::world::Phase;
 
 use crate::model::{ParcelTrace, Span, cause_label, cause_parts, phase_name};
 
-use super::{span_id, trace_id, write_value};
+use super::{RunId, span_id, trace_id, write_value};
 
 /// Nanoseconds per tick (1 tick = 0.5 s).
 const NANOS_PER_TICK: u64 = 500_000_000;
@@ -46,12 +49,18 @@ pub struct OtlpOptions {
     /// 2026-01-01T00:00:00Z, so tools that dislike 1970 timestamps still
     /// render the trace; set it to any fixed value you like.
     pub epoch_unix_nanos: u64,
+    /// Identity of the run, mixed into every trace and span id. The caller
+    /// derives it with [`run_id`](super::run_id) from scenario, seed and
+    /// variant. The default (all zeros) is fine for a single run, but two
+    /// runs exported with the default collide in one collector.
+    pub run_id: RunId,
 }
 
 impl Default for OtlpOptions {
     fn default() -> Self {
         Self {
             epoch_unix_nanos: 1_767_225_600 * 1_000_000_000,
+            run_id: [0; 8],
         }
     }
 }
@@ -115,10 +124,10 @@ pub(super) fn work_at(
     list[..i].iter().rev().find(|w| tick < w.end).copied()
 }
 
-fn link(work: Work, kind: &str, cause: WaitCause) -> Value {
+fn link(run: RunId, work: Work, kind: &str, cause: WaitCause) -> Value {
     json!({
-        "traceId": trace_id(work.parcel),
-        "spanId": span_id(work.parcel, work.span_index),
+        "traceId": trace_id(run, work.parcel),
+        "spanId": span_id(run, work.parcel, work.span_index),
         "attributes": [
             s_attr("link.type", kind),
             s_attr("switchyard.cause", cause_label(cause)),
@@ -141,6 +150,16 @@ fn phase_span(
     if let Some(r) = span.attrs.robot {
         attrs.push(i_attr("switchyard.robot.id", i64::from(r.0)));
     }
+    if let (Some(cause), Some(root)) = (span.attrs.delay_cause, span.attrs.delay_root) {
+        let (c, r) = (cause_parts(cause), cause_parts(root));
+        attrs.push(s_attr("switchyard.delay.kind", c.kind));
+        attrs.push(i_attr("switchyard.delay.id", i64::from(c.id)));
+        attrs.push(s_attr("switchyard.delay.root.kind", r.kind));
+        attrs.push(i_attr("switchyard.delay.root.id", i64::from(r.id)));
+        if let Some(f) = span.attrs.fault() {
+            attrs.push(i_attr("switchyard.fault.id", i64::from(f.0)));
+        }
+    }
     let mut links = Vec::new();
     if span.phase == Phase::Blocked {
         for (prefix, kind, cause) in [
@@ -162,16 +181,16 @@ fn phase_span(
             if let Some(robot) = parts.robot
                 && let Some(w) = work_at(work, robot, span.start)
             {
-                links.push(link(w, kind, cause));
+                links.push(link(opts.run_id, w, kind, cause));
             }
         }
         // The root often equals the direct blocker: one link is enough.
         links.dedup_by(|b, a| a["traceId"] == b["traceId"] && a["spanId"] == b["spanId"]);
     }
     let mut v = json!({
-        "traceId": trace_id(trace.parcel),
-        "spanId": span_id(trace.parcel, index),
-        "parentSpanId": span_id(trace.parcel, 0),
+        "traceId": trace_id(opts.run_id, trace.parcel),
+        "spanId": span_id(opts.run_id, trace.parcel, index),
+        "parentSpanId": span_id(opts.run_id, trace.parcel, 0),
         "name": phase_name(span.phase),
         "kind": KIND_INTERNAL,
         "startTimeUnixNano": opts.nanos(span.start),
@@ -196,12 +215,19 @@ fn root_span(trace: &ParcelTrace, opts: &OtlpOptions) -> Value {
     if let Some(c) = trace.chute {
         attrs.push(i_attr("switchyard.chute.id", i64::from(c.0)));
     }
-    for r in &trace.robots {
-        attrs.push(i_attr("switchyard.robot.id", i64::from(r.0)));
+    // OTLP attribute keys must be unique: all robots go in one array value.
+    if !trace.robots.is_empty() {
+        attrs.push(
+            json!({"key": "switchyard.robot.id", "value": {"arrayValue": {"values":
+                trace.robots.iter()
+                    .map(|r| json!({"intValue": i64::from(r.0).to_string()}))
+                    .collect::<Vec<_>>()
+            }}}),
+        );
     }
     let mut v = json!({
-        "traceId": trace_id(trace.parcel),
-        "spanId": span_id(trace.parcel, 0),
+        "traceId": trace_id(opts.run_id, trace.parcel),
+        "spanId": span_id(opts.run_id, trace.parcel, 0),
         "name": "parcel",
         "kind": KIND_INTERNAL,
         "startTimeUnixNano": opts.nanos(trace.arrival),

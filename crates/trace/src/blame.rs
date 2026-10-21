@@ -5,10 +5,19 @@
 //! one parcel, so a blocked parcel-tick is a blocked robot-tick. Direct
 //! blame says who was in the way; root blame says who started it. Both sum
 //! to the total blocked time, so nothing is double counted within one view.
+//!
+//! A second view counts **fault delay in every phase**: each span annotated
+//! with a `ParcelDelayed` (see [`crate::SpanAttrs::delay_root`]) charges its ticks
+//! to the fault the root names, and to the phase the parcel was in. That view
+//! also sums to its own total: the sum over faults, the sum over phases and
+//! the sum over (fault, phase) cells all equal
+//! [`BlameIndex::total_fault_delay_ticks`]. The two views overlap on blocked
+//! ticks a fault caused (those are in both), so do not add them.
 
 use std::collections::BTreeMap;
 
 use switchyard_core::events::WaitCause;
+use switchyard_core::ids::FaultId;
 use switchyard_core::world::Phase;
 
 use crate::model::{ParcelTrace, Span};
@@ -29,6 +38,8 @@ pub struct BlameIndex {
     direct: BTreeMap<WaitCause, u64>,
     unattributed: u64,
     total: u64,
+    /// Fault-delayed parcel-ticks by (fault, phase).
+    fault_phase: BTreeMap<(FaultId, Phase), u64>,
 }
 
 impl BlameIndex {
@@ -40,6 +51,9 @@ impl BlameIndex {
 
     /// Charge one span. Spans that are not `Blocked` are ignored.
     pub fn add_span(&mut self, span: &Span) {
+        if let Some(fault) = span.attrs.fault() {
+            *self.fault_phase.entry((fault, span.phase)).or_default() += u64::from(span.ticks());
+        }
         if span.phase != Phase::Blocked {
             return;
         }
@@ -59,6 +73,51 @@ impl BlameIndex {
         for span in &trace.spans {
             self.add_span(span);
         }
+    }
+
+    /// Parcel-ticks that `fault` delayed, in any phase.
+    #[must_use]
+    pub fn fault_delay(&self, fault: FaultId) -> u64 {
+        self.fault_phase
+            .range((fault, Phase::Queued)..)
+            .take_while(|((f, _), _)| *f == fault)
+            .map(|(_, &t)| t)
+            .sum()
+    }
+
+    /// Parcel-ticks that `fault` delayed while parcels were in `phase`.
+    #[must_use]
+    pub fn fault_delay_in(&self, fault: FaultId, phase: Phase) -> u64 {
+        self.fault_phase.get(&(fault, phase)).copied().unwrap_or(0)
+    }
+
+    /// Parcel-ticks any fault delayed while parcels were in `phase`.
+    #[must_use]
+    pub fn fault_delay_by_phase(&self, phase: Phase) -> u64 {
+        self.fault_phase
+            .iter()
+            .filter(|((_, p), _)| *p == phase)
+            .map(|(_, &t)| t)
+            .sum()
+    }
+
+    /// Parcel-ticks any fault delayed, in any phase.
+    #[must_use]
+    pub fn total_fault_delay_ticks(&self) -> u64 {
+        self.fault_phase.values().sum()
+    }
+
+    /// Every fault with delay, with its total, in fault order.
+    #[must_use]
+    pub fn fault_delays(&self) -> Vec<(FaultId, u64)> {
+        let mut out: Vec<(FaultId, u64)> = Vec::new();
+        for (&(f, _), &t) in &self.fault_phase {
+            match out.last_mut() {
+                Some((last, sum)) if *last == f => *sum += t,
+                _ => out.push((f, t)),
+            }
+        }
+        out
     }
 
     /// Total blocked robot-ticks seen.
@@ -139,6 +198,7 @@ mod tests {
                 robot: None,
                 direct_blocker: Some(direct),
                 root_cause: Some(root),
+                ..SpanAttrs::default()
             },
         }
     }
