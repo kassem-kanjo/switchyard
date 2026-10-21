@@ -3,8 +3,10 @@
 //!
 //! For every seed, the scenario runs twice: once with the faults and once
 //! as its fault-free twin on the same seed. Each pair is scored with
-//! `switchyard_analysis::resilience`, one row per seed plus the spread
-//! across seeds. All runs are independent sims, so they run in parallel
+//! `switchyard_analysis::resilience` (formulas and sources in its module
+//! docs; the Bruneau/DT/RR lineage is cited there, not in the output), one
+//! row per seed plus the spread across seeds and a one-line legend per
+//! column for site operations staff. All runs are independent sims, so they run in parallel
 //! with rayon (parallelism only across sims, ADR 0002 §4).
 
 use std::path::PathBuf;
@@ -12,7 +14,7 @@ use std::process::ExitCode;
 
 use clap::Args;
 use rayon::prelude::*;
-use switchyard_analysis::resilience::ResilienceScore;
+use switchyard_analysis::resilience::{Params, ResilienceScore};
 use switchyard_analysis::twin::{self, RunSummary};
 use switchyard_core::Tick;
 use switchyard_core::config::ScenarioConfig;
@@ -47,6 +49,14 @@ pub struct ChaosArgs {
     /// the scenario's seed.
     #[arg(long)]
     seeds: Option<String>,
+    /// A parcel counts as late when the faults add more than this many
+    /// minutes to its time from arrival to chute.
+    #[arg(long, default_value_t = 10)]
+    sla_extra_minutes: u32,
+    /// Optional absolute cutoff in minutes from arrival to chute (e.g. the
+    /// time to the truck): also count parcels slower than this in each run.
+    #[arg(long)]
+    cutoff_minutes: Option<u32>,
 }
 
 /// Run the subcommand; errors go to stderr.
@@ -107,19 +117,24 @@ fn run(args: &ChaosArgs) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let wall = started.elapsed().as_secs_f64();
 
-    let rows: Vec<(u64, &RunSummary, &RunSummary, ResilienceScore)> = runs
+    let params = Params {
+        sla_extra_minutes: args.sla_extra_minutes,
+        cutoff_minutes: args.cutoff_minutes,
+        ..Params::default()
+    };
+    let rows: Vec<Row<'_>> = runs
         .as_chunks::<2>()
         .0
         .iter()
         .zip(&seeds)
         .map(|([baseline, faulted], &seed)| {
-            let score = twin::resilience(baseline, faulted);
+            let score = twin::resilience(baseline, faulted, params);
             (seed, baseline, faulted, score)
         })
         .collect();
 
     print_header(&faulted, args.ticks, seeds.len(), &runs[0]);
-    print_table(&rows);
+    print_table(&rows, params);
     println!(
         "wall          {wall:.2} s for {} runs (rayon, {} threads)",
         runs.len(),
@@ -141,9 +156,10 @@ fn print_header(cfg: &ScenarioConfig, ticks: Tick, seeds: usize, any: &RunSummar
         seeds,
         if seeds == 1 { "" } else { "s" }
     );
-    for (i, f) in cfg.faults.iter().enumerate() {
+    for (id, f) in cfg.enabled_faults() {
         println!(
-            "fault F{i:<9} {:<38} ticks {}..{} (min {:.1}-{:.1})",
+            "fault {:<9} {:<38} ticks {}..{} (min {:.1}-{:.1})",
+            id.to_string(),
             describe(&f.kind),
             f.at,
             f.end(),
@@ -152,8 +168,8 @@ fn print_header(cfg: &ScenarioConfig, ticks: Tick, seeds: usize, any: &RunSummar
         );
     }
     println!(
-        "              twin = same seed, no faults; lost = Bruneau area (parcels), \
-         recovery = within 5 % of the twin for 5 min"
+        "              each seed runs twice: with the faults, and as a fault-free twin \
+         (same seed, same parcels)"
     );
 }
 
@@ -178,53 +194,218 @@ fn describe(kind: &FaultKind) -> String {
     }
 }
 
-fn print_table(rows: &[(u64, &RunSummary, &RunSummary, ResilienceScore)]) {
-    println!(
-        "{:>6} {:>10} {:>10} {:>8} {:>9} {:>9} {:>6} {:>6}",
-        "seed", "twin", "faulted", "lost", "max dip", "recover", "GDR", "util"
+type Row<'a> = (u64, &'a RunSummary, &'a RunSummary, ResilienceScore);
+
+/// `a vs b` for a faulted value and its twin.
+fn versus(a: impl std::fmt::Display, b: impl std::fmt::Display) -> String {
+    format!("{a} vs {b}")
+}
+
+fn ratio(r: Option<f64>) -> String {
+    r.map_or_else(|| "-".to_owned(), |x| format!("{x:.2}"))
+}
+
+fn print_table(rows: &[Row<'_>], params: Params) {
+    let late = format!("late >{}m", params.sla_extra_minutes);
+    let cutoff = params.cutoff_minutes.map(|m| format!("over {m}m"));
+    print!(
+        "{:>5} {:>18} {:>9} {:>14} {:>11} {:>8} {:>8} {:>14} {:>14} {:>8} {:>5}",
+        "seed",
+        "delay (parcel-min)",
+        late,
+        "peak backlog",
+        "undelivered",
+        "max dip",
+        "recover",
+        "served/offered",
+        "lost stn/chute",
+        "thru/cap",
+        "util"
     );
-    for (seed, b, f, s) in rows {
-        println!(
-            "{seed:>6} {:>10} {:>10} {:>8} {:>8.1}% {:>9} {:>6} {:>5.0}%",
-            b.stats.delivered,
-            f.stats.delivered,
-            s.lost_parcels,
+    if let Some(c) = &cutoff {
+        print!(" {c:>12}");
+    }
+    println!();
+    for (seed, _, _, s) in rows {
+        print!(
+            "{seed:>5} {:>18.0} {:>9} {:>14} {:>11} {:>7.1}% {:>8} {:>14} {:>14} {:>8} {:>4.0}%",
+            s.delay.net_minutes(),
+            s.delay.late_parcels,
+            versus(s.peak_backlog, s.twin_peak_backlog),
+            s.undelivered,
             s.max_dip_pct,
             s.time_to_recover_min
                 .map_or_else(|| "never".to_owned(), |m| format!("{m} min")),
-            s.degradation_ratio
-                .map_or_else(|| "-".to_owned(), |g| format!("{g:.2}")),
+            versus(ratio(s.served_offered), ratio(s.twin_served_offered)),
+            format!("{} / {}", s.stations_lost, s.chutes_lost),
+            ratio(s.throughput_vs_capacity),
             100.0 * s.baseline_utilisation
         );
+        if let Some(c) = s.past_cutoff {
+            print!(" {:>12}", versus(c.faulted, c.twin));
+        }
+        println!();
     }
+    print_delay_detail(rows);
+    print_spread(rows);
+    print_legend(params);
+}
+
+/// Gross and offsetting parts of the delay, when some parcels were faster
+/// with the fault than without it.
+fn print_delay_detail(rows: &[Row<'_>]) {
+    if rows.iter().all(|r| r.3.delay.faster_parcels == 0) {
+        return;
+    }
+    println!(
+        "delay detail (parcel-min): net = extra time of delayed parcels - time saved by faster ones"
+    );
+    for (seed, _, _, s) in rows {
+        let d = s.delay;
+        println!(
+            "{seed:>5}   net {:>8.0} = {:>8.0} over {:>5} delayed parcels - {:>6.0} over {:>5} faster",
+            d.net_minutes(),
+            d.gross_minutes(),
+            d.delayed_parcels,
+            d.faster_minutes(),
+            d.faster_parcels
+        );
+    }
+}
+
+fn print_spread(rows: &[Row<'_>]) {
     if rows.len() < 2 {
         return;
     }
     let col = |f: &dyn Fn(&ResilienceScore) -> Option<f64>| -> Vec<f64> {
         rows.iter().filter_map(|r| f(&r.3)).collect()
     };
-    #[allow(clippy::cast_precision_loss)]
-    let lost = col(&|s| Some(s.lost_parcels as f64));
-    let dip = col(&|s| Some(s.max_dip_pct));
-    let ttr = col(&|s| s.time_to_recover_min.map(f64::from));
-    let gdr = col(&|s| s.degradation_ratio);
     let never = rows
         .iter()
         .filter(|r| r.3.time_to_recover_min.is_none())
         .count();
     println!("spread over {} seeds (mean ± sd, min..max):", rows.len());
-    println!("  lost        {}", spread(&lost, 0, ""));
-    println!("  max dip     {}", spread(&dip, 1, " %"));
+    let line = |name: &str, v: &[f64], digits: usize, unit: &str| {
+        println!("  {name:<18} {}", spread(v, digits, unit));
+    };
+    line(
+        "delay",
+        &col(&|s| Some(s.delay.net_minutes())),
+        0,
+        " parcel-min",
+    );
+    line(
+        "late",
+        &col(&|s| Some(f64::from(s.delay.late_parcels))),
+        0,
+        " parcels",
+    );
+    line(
+        "peak backlog",
+        &col(&|s| Some(f64::from(s.peak_backlog))),
+        0,
+        " parcels",
+    );
+    line(
+        "undelivered",
+        &col(&|s| Some(f64::from(s.undelivered))),
+        0,
+        " parcels",
+    );
+    line("max dip", &col(&|s| Some(s.max_dip_pct)), 1, " %");
     println!(
-        "  recover     {}{}",
-        spread(&ttr, 1, " min"),
+        "  {:<18} {}{}",
+        "recover",
+        spread(&col(&|s| s.time_to_recover_min.map(f64::from)), 1, " min"),
         if never > 0 {
             format!(" ({never} never recovered)")
         } else {
             String::new()
         }
     );
-    println!("  GDR         {}", spread(&gdr, 2, ""));
+    line("served/offered", &col(&|s| s.served_offered), 2, "");
+    line(
+        "stations lost",
+        &col(&|s| Some(f64::from(s.stations_lost))),
+        1,
+        "",
+    );
+    line(
+        "chutes lost",
+        &col(&|s| Some(f64::from(s.chutes_lost))),
+        1,
+        "",
+    );
+    line("thru/cap", &col(&|s| s.throughput_vs_capacity), 2, "");
+}
+
+fn print_legend(params: Params) {
+    let sla = params.sla_extra_minutes;
+    println!("columns (faulted run compared with its fault-free twin):");
+    for (name, text) in [
+        (
+            "delay",
+            "total extra time the fault added to regular parcels, in parcel-minutes \
+             (60 = one parcel 1 hour late, or 60 parcels 1 minute late)"
+                .to_owned(),
+        ),
+        (
+            "late",
+            format!("regular parcels the fault delayed by more than {sla} min"),
+        ),
+        (
+            "peak backlog",
+            "most parcels waiting or in transit at once, faulted vs twin".to_owned(),
+        ),
+        (
+            "undelivered",
+            "parcels the fault left unsorted when the run ended".to_owned(),
+        ),
+        (
+            "max dip",
+            "worst minute's drop in sorted parcels below the twin".to_owned(),
+        ),
+        (
+            "recover",
+            "minutes from the first fault until throughput holds within 5 % of the twin \
+             for 5 minutes"
+                .to_owned(),
+        ),
+        (
+            "served/offered",
+            "parcels sorted / parcels arriving while the fault lasted (surge parcels \
+             included), faulted vs twin"
+                .to_owned(),
+        ),
+        (
+            "lost stn/chute",
+            "stations lost = stations whose loading cell is blocked by a failed robot \
+             (or that are down or cut off); chutes lost = jammed, or every access cell \
+             blocked; the most at once"
+                .to_owned(),
+        ),
+        (
+            "thru/cap",
+            "share of throughput kept / share of capacity kept during the fault; below 1 \
+             = congestion made it worse than the lost capacity alone; - = the fault \
+             removed no capacity"
+                .to_owned(),
+        ),
+        (
+            "util",
+            "share of robots busy in the twin (the same fault hurts more on a busier floor)"
+                .to_owned(),
+        ),
+    ] {
+        println!("  {name:<15} {text}");
+    }
+    if let Some(m) = params.cutoff_minutes {
+        println!(
+            "  {:<15} parcels that took longer than {m} min from arrival to chute, \
+             faulted vs twin",
+            format!("over {m}m")
+        );
+    }
 }
 
 /// `mean ± sd (min..max)` with `digits` decimals.

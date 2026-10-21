@@ -114,7 +114,8 @@ fn run(path: &PathBuf, ticks: u32, seed: Option<u64>) -> Result<(), String> {
                     // `Cycle` is only ever a root, never a direct cause.
                     WaitCause::BlockedBy(_) | WaitCause::Cycle(_) => waits.blocked += 1,
                     WaitCause::Yielded(_) => waits.yielded += 1,
-                    WaitCause::CellBlocked(_) => waits.cell += 1,
+                    // A failed robot waiting on its own fault.
+                    WaitCause::CellBlocked(_) | WaitCause::Fault(_) => waits.cell += 1,
                     WaitCause::ChuteUnavailable(_) => waits.chute += 1,
                     WaitCause::StationBusy(_) => waits.station += 1,
                 },
@@ -153,7 +154,7 @@ fn run(path: &PathBuf, ticks: u32, seed: Option<u64>) -> Result<(), String> {
     );
     println!("mis-sorted    {}", stats.mis_sorted);
     println!(
-        "robot waits   blocked {}, yielded {}, cell blocked {}, chute unavailable {}, station busy {} (robot-ticks)",
+        "robot waits   blocked {}, yielded {}, fault or cell blocked {}, chute unavailable {}, station busy {} (robot-ticks)",
         waits.blocked, waits.yielded, waits.cell, waits.chute, waits.station
     );
     println!("stalls        floor {stalls}, robot {robot_stalls}");

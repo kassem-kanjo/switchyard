@@ -8,15 +8,54 @@
 
 use switchyard_core::Tick;
 use switchyard_core::events::Event;
+use switchyard_core::faults::SURGE_KEY_FLAG;
+use switchyard_core::ids::StationId;
 use switchyard_core::sim::Sim;
 use switchyard_core::world::RobotState;
 
 /// Ticks per simulated minute (1 tick = 0.5 s).
 pub const TICKS_PER_MINUTE: Tick = 120;
 
-/// Draw keys at or above this value belong to volume-surge parcels
-/// (`switchyard_core::world::Parcels::key`).
-const SURGE_KEY: u64 = 1 << 62;
+/// One parcel of a run: its cross-run identity and its timing.
+///
+/// `(station, key)` identifies a parcel across a run and its twin: draw keys
+/// are counter-based per station (ADR 0002 §3), so regular parcel `k` at
+/// station `s` arrives at the same tick with the same destination in both
+/// runs. Parcel ids are *not* stable across runs (a surge interleaves extra
+/// ids), so matching must use this pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParcelRecord {
+    /// Induction station.
+    pub station: StationId,
+    /// Draw key (the station ordinal for regular parcels).
+    pub key: u64,
+    /// Arrival tick.
+    pub arrived: Tick,
+    /// Drop tick, or `None` if the parcel was not delivered in the run.
+    pub dropped: Option<Tick>,
+}
+
+impl ParcelRecord {
+    /// True for the extra parcels of a volume surge.
+    #[must_use]
+    pub const fn is_surge(&self) -> bool {
+        self.key & SURGE_KEY_FLAG != 0
+    }
+
+    /// Latency in ticks, censored at `horizon` (a parcel still on the floor
+    /// at the end of the run counts as delivered at `horizon`).
+    #[must_use]
+    pub fn latency_censored(&self, horizon: Tick) -> Tick {
+        let end = self.dropped.map_or(horizon, |d| d.min(horizon));
+        end.saturating_sub(self.arrived)
+    }
+
+    /// True if the parcel was delivered strictly before `horizon`.
+    #[must_use]
+    pub fn delivered_by(&self, horizon: Tick) -> bool {
+        self.dropped.is_some_and(|d| d < horizon)
+    }
+}
 
 /// Per-minute metrics of one run. Every vector has one entry per complete
 /// minute.
@@ -43,6 +82,43 @@ impl MinuteSeries {
     #[must_use]
     pub fn minutes(&self) -> usize {
         self.delivered.len()
+    }
+
+    /// The parcel-count series of a run of `ticks` ticks (utilisation is left
+    /// at 0; [`MetricsRecorder::finish`] fills it in).
+    #[must_use]
+    pub fn from_parcels(parcels: &[ParcelRecord], ticks: Tick) -> Self {
+        let minutes = (ticks / TICKS_PER_MINUTE) as usize;
+        let mut s = Self {
+            arrived: vec![0; minutes],
+            delivered: vec![0; minutes],
+            delivered_regular: vec![0; minutes],
+            backlog: vec![0; minutes],
+            utilisation: vec![0.0; minutes],
+        };
+        let bucket = |t: Tick| (t / TICKS_PER_MINUTE) as usize;
+        for p in parcels {
+            if let Some(a) = s.arrived.get_mut(bucket(p.arrived)) {
+                *a += 1;
+            }
+            let Some(d) = p.dropped else {
+                continue;
+            };
+            let m = bucket(d);
+            if m < minutes {
+                s.delivered[m] += 1;
+                if !p.is_surge() {
+                    s.delivered_regular[m] += 1;
+                }
+            }
+        }
+        let (mut arrived, mut delivered) = (0u32, 0u32);
+        for m in 0..minutes {
+            arrived += s.arrived[m];
+            delivered += s.delivered[m];
+            s.backlog[m] = arrived - delivered;
+        }
+        s
     }
 
     /// Mean utilisation over the whole run (0 for an empty series).
@@ -132,42 +208,38 @@ impl MetricsRecorder {
         self.tick += 1;
     }
 
+    /// Every parcel that arrived, by parcel id. `sim` is the run's final
+    /// state, which holds each parcel's station and draw key.
+    #[must_use]
+    pub fn parcels(&self, sim: &Sim) -> Vec<ParcelRecord> {
+        let p = &sim.world().parcels;
+        self.arrived_at
+            .iter()
+            .zip(&self.dropped_at)
+            .enumerate()
+            .map(|(i, (&arrived, &dropped))| ParcelRecord {
+                station: p.station[i],
+                key: p.key[i],
+                arrived,
+                dropped,
+            })
+            .collect()
+    }
+
+    /// Ticks recorded so far.
+    #[must_use]
+    pub const fn ticks(&self) -> Tick {
+        self.tick
+    }
+
     /// The series. `sim` is the run's final state, used to tell surge
     /// parcels from regular ones.
     #[must_use]
     pub fn finish(&self, sim: &Sim) -> MinuteSeries {
-        let keys = &sim.world().parcels.key;
-        let minutes = (self.tick / TICKS_PER_MINUTE) as usize;
-        let mut s = MinuteSeries {
-            arrived: vec![0; minutes],
-            delivered: vec![0; minutes],
-            delivered_regular: vec![0; minutes],
-            backlog: vec![0; minutes],
-            utilisation: vec![0.0; minutes],
-        };
-        let bucket = |t: Tick| (t / TICKS_PER_MINUTE) as usize;
-        for (i, &at) in self.arrived_at.iter().enumerate() {
-            if let Some(a) = s.arrived.get_mut(bucket(at)) {
-                *a += 1;
-            }
-            let Some(d) = self.dropped_at[i] else {
-                continue;
-            };
-            let m = bucket(d);
-            if m < minutes {
-                s.delivered[m] += 1;
-                if keys.get(i).is_none_or(|&k| k < SURGE_KEY) {
-                    s.delivered_regular[m] += 1;
-                }
-            }
-        }
-        let (mut arrived, mut delivered) = (0u32, 0u32);
-        for m in 0..minutes {
-            arrived += s.arrived[m];
-            delivered += s.delivered[m];
-            s.backlog[m] = arrived - delivered;
-            let robot_ticks = self.robots as f64 * f64::from(TICKS_PER_MINUTE);
-            s.utilisation[m] = if robot_ticks > 0.0 {
+        let mut s = MinuteSeries::from_parcels(&self.parcels(sim), self.tick);
+        let robot_ticks = self.robots as f64 * f64::from(TICKS_PER_MINUTE);
+        for (m, u) in s.utilisation.iter_mut().enumerate() {
+            *u = if robot_ticks > 0.0 {
                 self.busy_ticks[m] as f64 / robot_ticks
             } else {
                 0.0
