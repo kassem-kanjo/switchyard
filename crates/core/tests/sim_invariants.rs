@@ -306,10 +306,17 @@ fn wait_events_match_the_wait_for_record() {
                 ..
             } = *e
             {
-                assert_eq!(
-                    Some(root),
-                    reference_root(sim.wait_for(), robot.index()),
-                    "root of {robot}"
+                // A cycle's chains are rooted at its lowest member: as
+                // `Cycle` once it is a persisting deadlock, as `BlockedBy`
+                // while it is a transient meeting.
+                let expected = reference_root(sim.wait_for(), robot.index());
+                let young = match expected {
+                    Some(WaitCause::Cycle(m)) => Some(WaitCause::BlockedBy(m)),
+                    other => other,
+                };
+                assert!(
+                    Some(root) == expected || Some(root) == young,
+                    "root of {robot}: {root:?}, expected {expected:?}"
                 );
                 if root != direct {
                     deep += 1;
@@ -421,7 +428,7 @@ fn bag_swaps_make_robots_wait_with_chute_unavailable() {
 
 /// A planner that never moves anyone and blames the next robot: every robot
 /// with work is stuck, as in a gridlock.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Frozen;
 
 impl Planner for Frozen {
@@ -439,6 +446,10 @@ impl Planner for Frozen {
     }
 
     fn hash_state(&self, _: &mut Fnv1a) {}
+
+    fn box_clone(&self) -> Box<dyn Planner> {
+        Box::new(self.clone())
+    }
 }
 
 fn frozen_run(ticks: u32) -> (Sim, Vec<Event>) {

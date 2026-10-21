@@ -39,7 +39,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 use crate::grid::{Cell, CellIdx, DIRS, Grid};
-use crate::ids::ChuteId;
+use crate::ids::{ChuteId, StationId};
 use crate::layout::Layout;
 use crate::world::Goal;
 
@@ -103,31 +103,15 @@ impl DistanceTables {
     pub fn build_with_closed(layout: &Layout, against_flow_cost: u32, closed: &[bool]) -> Self {
         let g = &layout.grid;
         let cells = g.len();
-        let mut edge = edge_costs(layout, against_flow_cost);
-        if !closed.is_empty() {
-            for (from, costs) in edge.iter_mut().enumerate() {
-                let from = u32::try_from(from).unwrap_or(u32::MAX);
-                for (dir, cost) in costs.iter_mut().enumerate() {
-                    if step(g, from, dir).is_some_and(|to| closed[to as usize]) {
-                        *cost = 0;
-                    }
-                }
-            }
-        }
+        let edge = closed_edge_costs(layout, against_flow_cost, closed);
         let stations = layout.stations.len();
         let chutes = layout.chutes.len();
-        let goals = stations + chutes + 1;
-        let mut data = Vec::with_capacity(cells * goals);
+        let rows = goal_sources(layout);
+        let mut data = vec![UNREACHABLE; cells * rows.len()];
         let mut scratch = Dijkstra::new(cells);
-        for &s in &layout.stations {
-            scratch.run(g, &edge, &[s], &mut data);
+        for (sources, row) in rows.iter().zip(data.chunks_exact_mut(cells)) {
+            scratch.run_into(g, &edge, sources, row);
         }
-        for c in 0..chutes {
-            // Chute counts are bounded by u16 in the generator.
-            let id = ChuteId(u16::try_from(c).unwrap_or(u16::MAX));
-            scratch.run(g, &edge, &layout.chute_access(id), &mut data);
-        }
-        scratch.run(g, &edge, &layout.parking, &mut data);
         Self {
             cells,
             stations,
@@ -135,6 +119,91 @@ impl DistanceTables {
             edge,
             data,
         }
+    }
+
+    /// One goal's row of [`DistanceTables::build_with_closed`], computed
+    /// alone: the guided cost from every cell to `goal` with `closed` cells
+    /// closed. One Dijkstra instead of one per goal, for questions such as
+    /// "would this robot reach its goal if only that fault were removed?"
+    /// (fault blame, [`crate::faults`]).
+    #[must_use]
+    pub fn goal_row(
+        layout: &Layout,
+        against_flow_cost: u32,
+        goal: Goal,
+        closed: &[bool],
+    ) -> Vec<u32> {
+        let edge = closed_edge_costs(layout, against_flow_cost, closed);
+        let mut row = vec![UNREACHABLE; layout.grid.len()];
+        Dijkstra::new(layout.grid.len()).run_into(
+            &layout.grid,
+            &edge,
+            &goal_source(layout, goal),
+            &mut row,
+        );
+        row
+    }
+
+    /// The tables for the closed set `new`, derived from `self` (the tables
+    /// for the closed set `old`; both masks have one flag per cell) by
+    /// repairing each goal row locally instead of recomputing it (dynamic
+    /// shortest paths after Ramalingam and Reps): newly closed cells first
+    /// (the deletion repair, on the graph with both closed sets closed),
+    /// then newly opened cells (the insertion repair). A row the change
+    /// cannot affect costs a few neighbour checks. The result equals
+    /// [`DistanceTables::build_with_closed`] for `new` exactly (property
+    /// tests check it). Returns the tables and the number of rows that
+    /// changed.
+    ///
+    /// # Panics
+    /// If a mask's length is not the number of cells.
+    #[must_use]
+    pub fn with_closed_changed(
+        &self,
+        layout: &Layout,
+        against_flow_cost: u32,
+        old: &[bool],
+        new: &[bool],
+    ) -> (Self, usize) {
+        let g = &layout.grid;
+        assert!(
+            old.len() == self.cells && new.len() == self.cells,
+            "one flag per cell"
+        );
+        let edge = closed_edge_costs(layout, against_flow_cost, new);
+        let closed = changed(old, new, true);
+        let opened = changed(old, new, false);
+        // The deletion repair runs on the graph with both closed sets
+        // closed; without openings, that graph is the new one.
+        let union_edge = (!opened.is_empty()).then(|| {
+            let union: Vec<bool> = old.iter().zip(new).map(|(&o, &n)| o || n).collect();
+            closed_edge_costs(layout, against_flow_cost, &union)
+        });
+        let mut data = self.data.clone();
+        let mut scratch = Dijkstra::new(self.cells);
+        let mut changed_rows = 0;
+        for (sources, row) in goal_sources(layout)
+            .iter()
+            .zip(data.chunks_exact_mut(self.cells))
+        {
+            let mut changed = false;
+            if !closed.is_empty() {
+                let e = union_edge.as_deref().unwrap_or(&edge);
+                changed |= scratch.repair_increase(g, e, sources, &closed, row);
+            }
+            if !opened.is_empty() {
+                changed |= scratch.repair_decrease(g, &edge, sources, &opened, row);
+            }
+            changed_rows += usize::from(changed);
+        }
+        let tables = Self {
+            cells: self.cells,
+            stations: self.stations,
+            chutes: self.chutes,
+            edge,
+            data,
+        };
+        (tables, changed_rows)
     }
 
     /// Guided cost from `cell` to `goal`, or [`UNREACHABLE`].
@@ -195,6 +264,62 @@ fn edge_costs(layout: &Layout, k: u32) -> Vec<[u32; 4]> {
         .collect()
 }
 
+/// The cells whose flag becomes `to` between `old` and `new`.
+fn changed(old: &[bool], new: &[bool], to: bool) -> Vec<CellIdx> {
+    old.iter()
+        .zip(new)
+        .enumerate()
+        .filter(|&(_, (&o, &n))| o != to && n == to)
+        .map(|(c, _)| u32::try_from(c).unwrap_or(u32::MAX))
+        .collect()
+}
+
+/// The source cells of every goal row, in table order: stations, chutes,
+/// parking.
+fn goal_sources(layout: &Layout) -> Vec<Vec<CellIdx>> {
+    let stations = (0..layout.stations.len()).map(|s| {
+        // Station counts are u16 in the config.
+        Goal::Station(StationId(u16::try_from(s).unwrap_or(u16::MAX)))
+    });
+    let chutes = (0..layout.chutes.len()).map(|c| {
+        // Chute counts are bounded by u16 in the generator.
+        Goal::Chute(ChuteId(u16::try_from(c).unwrap_or(u16::MAX)))
+    });
+    stations
+        .chain(chutes)
+        .chain([Goal::Park])
+        .map(|goal| goal_source(layout, goal))
+        .collect()
+}
+
+/// The source cells of one goal: a station's induction cell, a chute's
+/// access cells, or the parking lane.
+fn goal_source(layout: &Layout, goal: Goal) -> Vec<CellIdx> {
+    match goal {
+        Goal::Station(s) => vec![layout.stations[s.index()]],
+        Goal::Chute(c) => layout.chute_access(c),
+        Goal::Park => layout.parking.clone(),
+    }
+}
+
+/// [`edge_costs`] with every edge into a `closed` cell removed (an empty
+/// slice closes nothing).
+fn closed_edge_costs(layout: &Layout, k: u32, closed: &[bool]) -> Vec<[u32; 4]> {
+    let g = &layout.grid;
+    let mut edge = edge_costs(layout, k);
+    if !closed.is_empty() {
+        for (from, costs) in edge.iter_mut().enumerate() {
+            let from = u32::try_from(from).unwrap_or(u32::MAX);
+            for (dir, cost) in costs.iter_mut().enumerate() {
+                if step(g, from, dir).is_some_and(|to| closed[to as usize]) {
+                    *cost = 0;
+                }
+            }
+        }
+    }
+    edge
+}
+
 /// The neighbour of `from` in direction `dir`, if it is on the grid.
 #[must_use]
 pub fn step(g: &Grid, from: CellIdx, dir: usize) -> Option<CellIdx> {
@@ -209,6 +334,8 @@ pub fn step(g: &Grid, from: CellIdx, dir: usize) -> Option<CellIdx> {
 struct Dijkstra {
     dist: Vec<u32>,
     source: Vec<bool>,
+    /// Cells a repair found affected (cleared after each repair).
+    mark: Vec<bool>,
     heap: BinaryHeap<Reverse<(u32, CellIdx)>>,
 }
 
@@ -217,11 +344,151 @@ impl Dijkstra {
         Self {
             dist: vec![UNREACHABLE; cells],
             source: vec![false; cells],
+            mark: vec![false; cells],
             heap: BinaryHeap::new(),
         }
     }
 
-    /// Backwards Dijkstra from `sources`; appends one row to `out`.
+    /// Repair `d`, a row that was exact before edges into `closed` were
+    /// removed, so it is exact for `edge` (the deletion case of dynamic
+    /// shortest paths after Ramalingam and Reps): find the cells that lost
+    /// every tight edge (transitively), clear them, and re-run Dijkstra over
+    /// them alone, seeded from their unaffected neighbours. Returns whether
+    /// any distance changed.
+    fn repair_increase(
+        &mut self,
+        g: &Grid,
+        edge: &[[u32; 4]],
+        sources: &[CellIdx],
+        closed: &[CellIdx],
+        d: &mut [u32],
+    ) -> bool {
+        self.mark_sources(sources, true);
+        let mut affected: Vec<CellIdx> = Vec::new();
+        let mut work: Vec<CellIdx> = closed.to_vec();
+        while let Some(x) = work.pop() {
+            for dir in 0..4 {
+                let Some(u) = step(g, x, dir) else {
+                    continue;
+                };
+                let du = d[u as usize];
+                if du == UNREACHABLE || self.source[u as usize] || self.mark[u as usize] {
+                    continue;
+                }
+                let valid = (0..4).any(|k| {
+                    let w = edge[u as usize][k];
+                    w != 0
+                        && step(g, u, k).is_some_and(|v| {
+                            !self.mark[v as usize]
+                                && self.expandable(g, v)
+                                && d[v as usize] != UNREACHABLE
+                                && du == w.saturating_add(d[v as usize])
+                        })
+                });
+                if !valid {
+                    self.mark[u as usize] = true;
+                    affected.push(u);
+                    work.push(u);
+                }
+            }
+        }
+        for &u in &affected {
+            d[u as usize] = UNREACHABLE;
+        }
+        for &u in &affected {
+            let best = (0..4)
+                .filter_map(|k| {
+                    let w = edge[u as usize][k];
+                    let v = step(g, u, k)?;
+                    (w != 0
+                        && !self.mark[v as usize]
+                        && self.expandable(g, v)
+                        && d[v as usize] != UNREACHABLE)
+                        .then(|| w.saturating_add(d[v as usize]))
+                })
+                .min();
+            if let Some(b) = best {
+                d[u as usize] = b;
+                self.heap.push(Reverse((b, u)));
+            }
+        }
+        self.propagate(g, edge, d, |s, u| s.mark[u as usize]);
+        for &u in &affected {
+            self.mark[u as usize] = false;
+        }
+        self.mark_sources(sources, false);
+        !affected.is_empty()
+    }
+
+    /// Repair `d`, a row that was exact before edges into `opened` were
+    /// added, so it is exact for `edge` (the insertion case): re-propagate
+    /// from each opened cell, which relaxes the predecessors the new edges
+    /// improve and spreads the decrease. Returns whether any distance
+    /// changed.
+    fn repair_decrease(
+        &mut self,
+        g: &Grid,
+        edge: &[[u32; 4]],
+        sources: &[CellIdx],
+        opened: &[CellIdx],
+        d: &mut [u32],
+    ) -> bool {
+        self.mark_sources(sources, true);
+        for &c in opened {
+            let dc = d[c as usize];
+            if dc != UNREACHABLE {
+                self.heap.push(Reverse((dc, c)));
+            }
+        }
+        let changed = self.propagate(g, edge, d, |_, _| true);
+        self.mark_sources(sources, false);
+        changed
+    }
+
+    /// Dijkstra from the heap's contents over `d`, relaxing predecessors that
+    /// `relax` admits; cells that are not expandable are not relaxed through.
+    /// Returns whether any distance changed.
+    fn propagate(
+        &mut self,
+        g: &Grid,
+        edge: &[[u32; 4]],
+        d: &mut [u32],
+        relax: impl Fn(&Self, CellIdx) -> bool,
+    ) -> bool {
+        let mut changed = false;
+        while let Some(Reverse((dv, v))) = self.heap.pop() {
+            if dv > d[v as usize] || !self.expandable(g, v) {
+                continue;
+            }
+            for dir in 0..4 {
+                let Some(u) = step(g, v, dir) else {
+                    continue;
+                };
+                let w = edge[u as usize][(dir + 2) % 4];
+                let nd = dv.saturating_add(w);
+                if w != 0 && nd < d[u as usize] && relax(self, u) {
+                    d[u as usize] = nd;
+                    changed = true;
+                    self.heap.push(Reverse((nd, u)));
+                }
+            }
+        }
+        changed
+    }
+
+    /// Can a path pass through `v`? Open floor, or a source of the row.
+    fn expandable(&self, g: &Grid, v: CellIdx) -> bool {
+        g.is_free(v) || self.source[v as usize]
+    }
+
+    fn mark_sources(&mut self, sources: &[CellIdx], on: bool) {
+        for &s in sources {
+            self.source[s as usize] = on;
+        }
+    }
+
+    /// Backwards Dijkstra from `sources`, writing one row into `out` (one
+    /// entry per cell).
     ///
     /// `dist[u]` is the cheapest cost of a path *from* `u` to a source, so
     /// we relax the edge `u -> v` (cost `edge[u][dir]`) when popping `v`.
@@ -230,9 +497,15 @@ impl Dijkstra {
     /// distance, as a robot standing there must know its way out, but is
     /// never expanded. Ties in the heap break by cell index, though the
     /// distances themselves do not depend on pop order.
-    fn run(&mut self, g: &Grid, edge: &[[u32; 4]], sources: &[CellIdx], out: &mut Vec<u32>) {
+    fn run_into(&mut self, g: &Grid, edge: &[[u32; 4]], sources: &[CellIdx], out: &mut [u32]) {
+        self.search(g, edge, sources);
+        out.copy_from_slice(&self.dist);
+    }
+
+    /// Backwards Dijkstra from `sources` into `self.dist`.
+    fn search(&mut self, g: &Grid, edge: &[[u32; 4]], sources: &[CellIdx]) {
         self.dist.fill(UNREACHABLE);
-        self.source.fill(false);
+        // `source` is all false here: every user clears its flags after.
         for &s in sources {
             self.dist[s as usize] = 0;
             self.source[s as usize] = true;
@@ -261,7 +534,9 @@ impl Dijkstra {
                 }
             }
         }
-        out.extend_from_slice(&self.dist);
+        for &src in sources {
+            self.source[src as usize] = false;
+        }
     }
 }
 
@@ -407,6 +682,103 @@ mod tests {
         }
         let d = DistanceTables::build_with_closed(&l, 3, &closed);
         assert_eq!(d.get(goal, above), UNREACHABLE);
+
+        // A single goal row agrees with the full tables.
+        let row = DistanceTables::goal_row(&l, 3, goal, &closed);
+        let goals = (0..l.stations.len())
+            .map(|s| Goal::Station(StationId(u16::try_from(s).unwrap())))
+            .chain([goal, Goal::Park]);
+        for gl in goals {
+            let row_g = DistanceTables::goal_row(&l, 3, gl, &closed);
+            for (c, &dist) in row_g.iter().enumerate() {
+                let cell = u32::try_from(c).unwrap();
+                assert_eq!(dist, d.get(gl, cell), "{gl:?} at {c}");
+            }
+        }
+        assert_eq!(row[above as usize], UNREACHABLE);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+        /// Incremental rebuilds equal full rebuilds, through a sequence of
+        /// closed sets (cells closing and reopening).
+        #[test]
+        fn incremental_rebuilds_equal_full_builds(
+            steps in proptest::collection::vec(
+                proptest::collection::vec(0usize..22 * 24, 0..12),
+                1..5,
+            )
+        ) {
+            let l = layout();
+            let n = l.grid.len();
+            let mut old = vec![false; n];
+            let mut tables = DistanceTables::build(&l, 3);
+            for cells in steps {
+                let mut new = vec![false; n];
+                for c in cells {
+                    new[c] = l.grid.is_free(u32::try_from(c).unwrap());
+                }
+                let (inc, _) = tables.with_closed_changed(&l, 3, &old, &new);
+                proptest::prop_assert_eq!(&inc, &DistanceTables::build_with_closed(&l, 3, &new));
+                tables = inc;
+                old = new;
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
+        /// One-way changes take the repair paths: close cells one at a time
+        /// (deletion repair), then reopen them in another order (insertion
+        /// repair); every step equals a full build.
+        #[test]
+        fn repairs_equal_full_builds(
+            cells in proptest::collection::vec(0usize..22 * 24, 1..10),
+            reopen_shift in 0usize..10,
+        ) {
+            let l = layout();
+            let n = l.grid.len();
+            let cells: Vec<usize> = cells
+                .into_iter()
+                .filter(|&c| l.grid.is_free(u32::try_from(c).unwrap()))
+                .collect();
+            let mut mask = vec![false; n];
+            let mut tables = DistanceTables::build(&l, 3);
+            let mut order = cells.clone();
+            for &c in &cells {
+                let mut next = mask.clone();
+                next[c] = true;
+                let (inc, _) = tables.with_closed_changed(&l, 3, &mask, &next);
+                proptest::prop_assert_eq!(&inc, &DistanceTables::build_with_closed(&l, 3, &next));
+                tables = inc;
+                mask = next;
+            }
+            if !order.is_empty() {
+                let k = reopen_shift % order.len();
+                order.rotate_left(k);
+            }
+            for c in order {
+                let mut next = mask.clone();
+                next[c] = false;
+                let (inc, _) = tables.with_closed_changed(&l, 3, &mask, &next);
+                proptest::prop_assert_eq!(&inc, &DistanceTables::build_with_closed(&l, 3, &next));
+                tables = inc;
+                mask = next;
+            }
+        }
+    }
+
+    #[test]
+    fn a_far_closure_recomputes_few_rows() {
+        let l = layout();
+        let n = l.grid.len();
+        let tables = DistanceTables::build(&l, 3);
+        let mut new = vec![false; n];
+        new[l.grid.idx(Pos::new(1, 12)) as usize] = true;
+        let (inc, rows) = tables.with_closed_changed(&l, 3, &vec![false; n], &new);
+        assert_eq!(inc, DistanceTables::build_with_closed(&l, 3, &new));
+        let total = l.stations.len() + l.chutes.len() + 1;
+        assert!(rows < total, "{rows} of {total} rows recomputed");
     }
 
     #[test]

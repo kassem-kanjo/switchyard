@@ -10,7 +10,7 @@
 //! | a robot with no cause of its own: loading, dropping, at its goal, idle | `BlockedBy(that robot)` |
 //! | a robot stopped by a failure fault `f` | `CellBlocked(f)` |
 //! | a `Yielded(b)` edge (`b` won the cell and moved on) | `Yielded(b)` |
-//! | a `ChuteUnavailable`, `StationBusy` or `CellBlocked` edge | that cause |
+//! | a `ChuteUnavailable`, `StationBusy`, `CellBlocked` or `Fault` edge | that cause, made fault-aware (a jammed chute's `ChuteUnavailable` becomes `Fault(jam)`) |
 //! | a robot already on the current path: a cycle | `Cycle(lowest member id)` |
 //!
 //! Only `BlockedBy` edges are followed, so a cycle consists of robots that
@@ -18,7 +18,9 @@
 //! lasts (a wait-for cycle exists iff the robots are deadlocked; research
 //! source [6]). PIBT resolves most head-on meetings within a tick or two, so
 //! [`DeadlockWatch`] calls a cycle a deadlock only once the *same* cycle has
-//! persisted for `planner.deadlock_ticks` consecutive ticks.
+//! persisted for `planner.deadlock_ticks` consecutive ticks. Until then the
+//! sim reports its chains rooted at `BlockedBy(canonical member)` (see
+//! [`DeadlockWatch::label`]): `Cycle` in an event always means a deadlock.
 //!
 //! # Cost and determinism
 //! [`RootWalker::walk`] visits every robot at most once per tick: a robot's
@@ -58,12 +60,19 @@ impl RootWalker {
 
     /// Walk every chain of `waits` (each robot's direct cause, `None` if it
     /// waited on nothing) to its root. `failed_by[r]` names the failure fault
-    /// that stopped robot `r`, if any.
+    /// that stopped robot `r`, if any. `resolve` maps a terminal cause to its
+    /// fault-aware root (for example a jammed chute's `ChuteUnavailable` to
+    /// `Fault(jam)`); pass `|c| c` when there are no faults.
     ///
     /// # Panics
     /// If `waits` and `failed_by` differ in length, or an edge names a robot
     /// outside them.
-    pub fn walk(&mut self, waits: &[Option<WaitCause>], failed_by: &[Option<FaultId>]) {
+    pub fn walk(
+        &mut self,
+        waits: &[Option<WaitCause>],
+        failed_by: &[Option<FaultId>],
+        resolve: impl Fn(WaitCause) -> WaitCause,
+    ) {
         assert_eq!(waits.len(), failed_by.len(), "one entry per robot");
         let n = waits.len();
         self.mark.clear();
@@ -101,7 +110,7 @@ impl RootWalker {
                     }
                     // Yielded is terminal (the winner moved on), and the
                     // other causes are not robots.
-                    terminal => break terminal,
+                    terminal => break terminal.map(&resolve),
                 }
             };
             for &p in &self.path {
@@ -170,6 +179,8 @@ pub struct DeadlockWatch {
     persist: u32,
     watched: Vec<Watched>,
     next: Vec<Watched>,
+    /// The tick of the last update.
+    tick: Tick,
 }
 
 impl DeadlockWatch {
@@ -181,6 +192,7 @@ impl DeadlockWatch {
             persist: persist.max(1),
             watched: Vec::new(),
             next: Vec::new(),
+            tick: 0,
         }
     }
 
@@ -203,7 +215,7 @@ impl DeadlockWatch {
                     reported: false,
                 },
             };
-            if !w.reported && t - w.since + 1 >= self.persist {
+            if !w.reported && w.persisted(t, self.persist) {
                 w.reported = true;
                 let cycle = w.members[0];
                 out.extend(w.members.iter().map(|&robot| Event::DeadlockDetected {
@@ -217,6 +229,32 @@ impl DeadlockWatch {
         }
         // Cycles absent this tick are broken: their episode is over.
         std::mem::swap(&mut self.watched, &mut self.next);
+        self.tick = t;
+    }
+
+    /// The root to report for a walked root, after [`DeadlockWatch::update`]
+    /// for the same tick: `Cycle(c)` stays a `Cycle` only if that cycle is a
+    /// deadlock (it has persisted); a transient cycle's chains are rooted at
+    /// `BlockedBy(c)`, its canonical member, like any robot that stayed put.
+    #[must_use]
+    pub fn label(&self, root: WaitCause) -> WaitCause {
+        match root {
+            WaitCause::Cycle(c)
+                if !self
+                    .watched
+                    .iter()
+                    .any(|w| w.members[0] == c && w.persisted(self.tick, self.persist)) =>
+            {
+                WaitCause::BlockedBy(c)
+            }
+            other => other,
+        }
+    }
+}
+
+impl Watched {
+    fn persisted(&self, t: Tick, persist: u32) -> bool {
+        t - self.since + 1 >= persist
     }
 }
 
@@ -230,7 +268,7 @@ mod tests {
 
     fn walk(waits: &[Option<WaitCause>], failed: &[Option<FaultId>]) -> RootWalker {
         let mut w = RootWalker::new();
-        w.walk(waits, failed);
+        w.walk(waits, failed, |c| c);
         w
     }
 
@@ -272,6 +310,39 @@ mod tests {
         assert_eq!(w.root(0), chute);
         assert_eq!(w.root(1), chute);
         assert_eq!(w.root(2), station);
+    }
+
+    #[test]
+    fn terminal_causes_resolve_to_the_fault_behind_them() {
+        // 0 -> 1, and robot 1 waits at a chute that fault 3 jammed.
+        let chute = Some(WaitCause::ChuteUnavailable(crate::ids::ChuteId(9)));
+        let waits = [blocked(1), chute];
+        let mut w = RootWalker::new();
+        w.walk(&waits, &[None; 2], |c| match c {
+            WaitCause::ChuteUnavailable(_) => WaitCause::Fault(FaultId(3)),
+            other => other,
+        });
+        assert_eq!(w.root(0), Some(WaitCause::Fault(FaultId(3))));
+        assert_eq!(w.root(1), Some(WaitCause::Fault(FaultId(3))));
+    }
+
+    #[test]
+    fn a_young_cycle_is_labelled_blocked_by_until_it_persists() {
+        let waits = [blocked(1), blocked(0)];
+        let mut walker = RootWalker::new();
+        let mut watch = DeadlockWatch::new(3);
+        let mut out = Vec::new();
+        let mut labels = Vec::new();
+        for t in 0..4 {
+            walker.walk(&waits, &[None; 2], |c| c);
+            watch.update(t, walker.cycles(), &mut out);
+            labels.push(watch.label(walker.root(1).unwrap()));
+        }
+        let young = WaitCause::BlockedBy(RobotId(0));
+        let dead = WaitCause::Cycle(RobotId(0));
+        assert_eq!(labels, vec![young, young, dead, dead]);
+        // Other roots pass through unchanged.
+        assert_eq!(watch.label(young), young);
     }
 
     #[test]
@@ -336,7 +407,7 @@ mod tests {
         let mut watch = DeadlockWatch::new(5);
         let mut out = Vec::new();
         for t in 100..108 {
-            walker.walk(&waits, &[None; 2]);
+            walker.walk(&waits, &[None; 2], |c| c);
             watch.update(t, walker.cycles(), &mut out);
         }
         assert_eq!(
@@ -358,7 +429,7 @@ mod tests {
         let mut out = Vec::new();
         for t in 0..12 {
             let waits = if t == 4 || t == 9 { &broken } else { &cycle };
-            walker.walk(waits, &[None; 2]);
+            walker.walk(waits, &[None; 2], |c| c);
             watch.update(t, walker.cycles(), &mut out);
         }
         assert!(deadlocks(&out).is_empty(), "{out:?}");
@@ -373,7 +444,7 @@ mod tests {
         let mut out = Vec::new();
         for t in 0..10 {
             let waits = if t == 5 { &broken } else { &cycle };
-            walker.walk(waits, &[None; 2]);
+            walker.walk(waits, &[None; 2], |c| c);
             watch.update(t, walker.cycles(), &mut out);
         }
         let ticks: Vec<_> = deadlocks(&out).iter().map(|d| (d.0, d.3)).collect();

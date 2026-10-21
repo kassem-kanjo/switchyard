@@ -30,6 +30,7 @@ pub mod grid;
 pub mod guidance;
 pub mod hash;
 pub mod ids;
+pub mod interventions;
 pub mod layout;
 pub mod pibt;
 pub mod planner;

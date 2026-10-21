@@ -10,32 +10,51 @@
 //! # Healthy counterparts (the CP3 intervention)
 //! Counterfactual root-cause analysis replays a run with one cause made
 //! healthy, `do(c := healthy)` (ADR 0005). For a fault, the intervention is
-//! **removing its [`FaultSpec`] from the schedule**
-//! ([`crate::config::ScenarioConfig::without_fault`]); nothing else changes.
-//! Each kind's healthy counterpart is therefore:
+//! **switching its [`FaultSpec`] off** in place
+//! ([`crate::config::ScenarioConfig::without_fault`], which lists it in
+//! `disabled_faults`); nothing else changes, and every other fault keeps its
+//! [`FaultId`] (its index in the schedule), so events and blame join across
+//! the original run and its replays. Each kind's healthy counterpart is
+//! therefore:
 //!
 //! | Fault | While active | Healthy counterpart |
 //! |---|---|---|
 //! | `robot-failure` | The robot stops where it is (`Failed`) and is an obstacle; its parcel is stuck on it until repair, when it resumes what it was doing | The robot keeps working |
 //! | `aisle-block` | No robot may enter the cells; robots inside may leave | The cells stay open |
 //! | `chute-jam` | The chute accepts nothing; a bag swap in progress pauses | Only the normal bag-swap cycle |
-//! | `induction-outage` | The station dispatches no new robots; robots already on their way still load (the queue drains no further); parcels keep arriving | The station keeps dispatching |
+//! | `induction-outage` | The station dispatches no new robots; robots already on their way still load; parcels keep arriving and queue | The station keeps dispatching |
 //! | `volume-surge` | Extra arrivals at `factor_pct / 100` times the station's rate, from the surge's own random streams | The base arrival process only |
-//! | `scanner-drift` | The station's scanner misreads at `error_rate_ppm` | The scenario's base misread rate |
+//! | `scanner-drift` | The station's scanner misreads at `error_rate_ppm` (a rate below the base rate is allowed: it models a scanner upgrade as an intervention) | The scenario's base misread rate |
 //!
 //! Removing a fault never shifts unrelated random draws: the base arrival,
 //! destination and scanner draws are keyed per station and per parcel, a
-//! surge draws its arrival counts from its own streams (keyed on the fault's
-//! content, not its position in the schedule) and gives its parcels keys in
-//! a range of their own, so the regular parcels of a surged run are
-//! bit-identical to those of the run without the surge.
+//! surge draws its arrival counts from its own streams (keyed on its stable
+//! id and content, [`FaultSpec::stream_key`]) and gives its parcels keys in
+//! a range of their own ([`SURGE_KEY_FLAG`]), so the regular parcels of a
+//! surged run are bit-identical to those of the run without the surge.
 //!
 //! # Topology
-//! A robot failure or an aisle block changes which cells robots can drive
-//! through. The sim then rebuilds its guided distance tables with those
-//! cells closed (no edge may enter them; robots route around), and every
-//! robot whose goal has become unreachable records `CellBlocked(fault)` and
-//! waits, instead of wandering.
+//! A robot failure (the dead robot's cell) or an aisle block changes which
+//! cells robots can drive through. The sim then switches to guided distance
+//! tables with those cells closed (no edge may enter them; robots route
+//! around; tables are cached per closed-cell set, so a fault ending reuses
+//! the healthy tables). Then:
+//! - a robot whose goal has become unreachable records `CellBlocked(f)` and
+//!   waits instead of wandering; a robot driving to a station it can no
+//!   longer reach gives its claim back (the parcel returns to `Queued`), and
+//!   stations dispatch only robots that can reach them;
+//! - **blame** goes to the fault whose closed cells are responsible: the
+//!   lowest-id active topology fault whose removal *alone* would reconnect
+//!   the robot (or shorten its detour). If no single removal suffices (the
+//!   faults only cut the route together), the lowest-id active topology
+//!   fault is blamed. Each test is one Dijkstra over one goal with that
+//!   fault's cells reopened, cached until the closed cells change.
+//!
+//! # Delay attribution
+//! Every parcel tick a fault costs is reported as an `Event::ParcelDelayed`
+//! naming the fault (see its docs): failed robots, jammed chutes, cut-off
+//! goals and stations, detours, outage queues and queues behind surge
+//! parcels. Scanner drift costs no time; it shows as `ParcelMisSorted`.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,11 +62,16 @@ use crate::Tick;
 use crate::config::ConfigError;
 use crate::grid::{Cell, Pos};
 use crate::hash::Fnv1a;
-use crate::ids::{ChuteId, RobotId, StationId};
+use crate::ids::{ChuteId, FaultId, RobotId, StationId};
 use crate::layout::Layout;
 
 /// Largest volume-surge factor, in percent (ten times the base rate).
 pub const MAX_SURGE_PCT: u32 = 1_000;
+
+/// Bit set in the draw key (`crate::world::Parcels::key`) of every
+/// volume-surge parcel: `key & SURGE_KEY_FLAG != 0` tells surge parcels
+/// from regular ones. Regular keys are ordinals, below 2^32.
+pub const SURGE_KEY_FLAG: u64 = 1 << 62;
 
 /// One scheduled fault.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,13 +206,15 @@ impl FaultSpec {
         }
     }
 
-    /// A 32-bit key derived from the spec's content: the same fault gets the
-    /// same random streams wherever it sits in the schedule, so removing
-    /// another fault never changes its draws.
+    /// The 32-bit key of the fault's random streams, from its stable id and
+    /// its content: switching another fault off never changes it (ids are
+    /// stable, [`crate::config::ScenarioConfig::without_fault`]), and two
+    /// identical specs at different ids still get independent streams.
     #[must_use]
-    pub fn content_key(&self) -> u32 {
+    pub fn stream_key(&self, id: FaultId) -> u32 {
         let mut h = Fnv1a::new();
         h.write(b"fault");
+        h.write_u32(id.0);
         self.hash_into(&mut h);
         let x = h.finish();
         // Fold the 64-bit hash to 32 bits.
@@ -539,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn content_keys_ignore_schedule_position_but_not_content() {
+    fn stream_keys_depend_on_the_id_and_the_content() {
         let a = FaultSpec {
             at: 100,
             duration: 50,
@@ -549,8 +575,10 @@ mod tests {
             },
         };
         let mut b = a.clone();
-        assert_eq!(a.content_key(), b.content_key());
+        assert_eq!(a.stream_key(FaultId(2)), b.stream_key(FaultId(2)));
+        // Identical specs at different ids draw independently.
+        assert_ne!(a.stream_key(FaultId(2)), b.stream_key(FaultId(3)));
         b.at = 101;
-        assert_ne!(a.content_key(), b.content_key());
+        assert_ne!(a.stream_key(FaultId(2)), b.stream_key(FaultId(2)));
     }
 }

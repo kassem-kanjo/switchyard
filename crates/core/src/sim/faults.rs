@@ -1,4 +1,7 @@
-//! Phase 1 of the tick: faults that start or end (see [`crate::faults`]).
+//! Phase 1 of the tick: faults that start or end, and the fault state the
+//! other phases consult (see [`crate::faults`]).
+
+use std::sync::Arc;
 
 use super::{Sim, chute_id, robot_id, station_id};
 use crate::TICKS_PER_HOUR;
@@ -6,12 +9,13 @@ use crate::Tick;
 use crate::arrivals::PoissonTable;
 use crate::config::ConfigError;
 use crate::events::{ChuteState, Event};
-use crate::faults::{FaultKind, FaultSpec};
-use crate::guidance::DistanceTables;
+use crate::faults::{FaultKind, FaultSpec, SURGE_KEY_FLAG};
+use crate::grid::CellIdx;
+use crate::guidance::{DistanceTables, UNREACHABLE};
 use crate::hash::Fnv1a;
-use crate::ids::{FaultId, StationId};
+use crate::ids::{ChuteId, FaultId, StationId};
 use crate::rng::{Stream, StreamId};
-use crate::world::{Phase, RobotState};
+use crate::world::{Goal, Phase, RobotState};
 
 /// Where a scheduled fault is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +24,8 @@ pub(super) enum Status {
     Pending = 0,
     Active = 1,
     Ended = 2,
+    /// Switched off in the scenario (`disabled_faults`): never starts.
+    Disabled = 3,
 }
 
 /// The extra arrival process of one volume surge at one station.
@@ -29,20 +35,32 @@ pub(super) struct SurgeRun {
     pub station: StationId,
     pub table: PoissonTable,
     pub stream: Stream,
-    /// The surge's content key: its parcels' draw keys live in a range
+    /// The surge's stream key: its parcels' draw keys live in a range
     /// derived from it.
     pub key: u32,
     /// Surge parcels generated so far at this station.
     pub count: u32,
 }
 
-/// Draw keys of surge parcels have bit 62 set, the fault's content key in
-/// bits 28..60 and the parcel's count in bits 0..28: disjoint from the
-/// regular parcels' keys (their ordinals, below 2^32) and from other
-/// surges, and small enough that the scanner's `2 * key + 1` fits in a u64.
+/// Draw keys of surge parcels have [`SURGE_KEY_FLAG`] (bit 62) set, the
+/// fault's stream key in bits 28..60 and the parcel's count in bits 0..28:
+/// disjoint from the regular parcels' keys (their ordinals, below 2^32) and
+/// from other surges, and small enough that the scanner's `2 * key + 1` fits
+/// in a u64.
 pub(super) fn surge_key(fault_key: u32, count: u32) -> u64 {
-    (1 << 62) | (u64::from(fault_key) << 28) | u64::from(count & 0x0fff_ffff)
+    SURGE_KEY_FLAG | (u64::from(fault_key) << 28) | u64::from(count & 0x0fff_ffff)
 }
+
+/// The stream key inside a surge parcel's draw key.
+fn surge_key_fault(key: u64) -> u32 {
+    // Bits 28..60 hold a u32.
+    #[allow(clippy::cast_possible_truncation)]
+    let k = (key >> 28) as u32;
+    k
+}
+
+/// Distance tables kept for reuse, keyed by their closed-cell set.
+const TABLE_CACHE: usize = 8;
 
 /// Fault schedule and the state of active faults. Empty (and absent from
 /// the state hash) for a healthy run.
@@ -54,18 +72,28 @@ pub(super) struct Faults {
     pub failed_by: Vec<Option<FaultId>>,
     /// Per robot: its state when it failed, restored on repair.
     pub pre_fail: Vec<RobotState>,
-    /// Per chute: active jams, and the state the first jam interrupted.
-    pub jams: Vec<u16>,
+    /// Per chute: the active jam holding it (lowest id), and the state the
+    /// jam interrupted.
+    pub jammed_by: Vec<Option<FaultId>>,
     pub jam_prior: Vec<ChuteState>,
-    /// Per station: active induction outages.
-    pub outages: Vec<u16>,
+    /// Per station: the active induction outage (lowest id).
+    pub outage_by: Vec<Option<FaultId>>,
     /// Per station: the misread rate imposed by active scanner drifts.
     pub drift_ppm: Vec<Option<u32>>,
     /// Active surge processes, by (fault, station).
     pub surges: Vec<SurgeRun>,
-    /// Lowest active fault that closes cells, if any: the cause recorded
-    /// by robots whose goal it cut off.
-    pub topology: Option<FaultId>,
+    /// Stream key and id of every surge that has started (its parcels can
+    /// outlive it in the queues).
+    pub surge_keys: Vec<(u32, FaultId)>,
+    /// Active faults that close cells, in id order, with their cells.
+    pub closed_by: Vec<(FaultId, Vec<CellIdx>)>,
+    /// Per station: the fault whose closed cells cut it off from the fleet.
+    pub station_cut: Vec<Option<FaultId>>,
+    /// Single-goal rows with one topology fault reopened, for blame; valid
+    /// until the closed cells change.
+    row_cache: Vec<(Goal, FaultId, Arc<[u32]>)>,
+    /// Full tables by closed-cell set (sorted), most recent last.
+    table_cache: Vec<(Vec<CellIdx>, Arc<DistanceTables>)>,
 }
 
 impl Faults {
@@ -73,10 +101,11 @@ impl Faults {
         Self {
             failed_by: vec![None; robots],
             pre_fail: vec![RobotState::Idle; robots],
-            jams: vec![0; chutes],
+            jammed_by: vec![None; chutes],
             jam_prior: vec![ChuteState::Open; chutes],
-            outages: vec![0; stations],
+            outage_by: vec![None; stations],
             drift_ppm: vec![None; stations],
+            station_cut: vec![None; stations],
             ..Self::default()
         }
     }
@@ -85,15 +114,30 @@ impl Faults {
         self.specs.is_empty()
     }
 
-    fn active(&self) -> impl Iterator<Item = (usize, &FaultSpec)> {
+    /// Is any fault closing cells?
+    pub fn topology_active(&self) -> bool {
+        !self.closed_by.is_empty()
+    }
+
+    fn active(&self) -> impl Iterator<Item = (FaultId, &FaultSpec)> {
         self.specs
             .iter()
             .enumerate()
             .filter(|&(i, _)| self.status[i] == Status::Active)
+            .map(|(i, f)| (fault_id(i), f))
+    }
+
+    /// The surge fault a surge parcel's draw key belongs to.
+    pub fn surge_of(&self, key: u64) -> Option<FaultId> {
+        let k = surge_key_fault(key);
+        self.surge_keys
+            .iter()
+            .find(|&&(sk, _)| sk == k)
+            .map(|&(_, f)| f)
     }
 }
 
-fn fault_id(i: usize) -> FaultId {
+pub(super) fn fault_id(i: usize) -> FaultId {
     // Schedules are far shorter than u32::MAX entries.
     #[allow(clippy::cast_possible_truncation)]
     FaultId(i as u32)
@@ -102,8 +146,9 @@ fn fault_id(i: usize) -> FaultId {
 impl Sim {
     /// Add a fault to the schedule at run time. It takes effect in phase 1
     /// of tick `spec.at` (so `at == self.tick()` starts it on the next
-    /// [`Sim::step`]). Removing it again is the counterfactual intervention:
-    /// re-run without it (see [`crate::faults`]).
+    /// [`Sim::step`]). Its id is its index in the schedule (after the
+    /// scenario's faults), so the same fault gets the same id in a replay
+    /// that schedules the same faults.
     ///
     /// # Errors
     /// [`ConfigError::BadFault`] if the fault is invalid for this floor or
@@ -124,10 +169,20 @@ impl Sim {
         Ok(id)
     }
 
-    /// The fault schedule, indexed by [`FaultId`].
+    /// The fault schedule, indexed by [`FaultId`] (switched-off faults
+    /// included, see [`Sim::fault_enabled`]).
     #[must_use]
     pub fn faults(&self) -> &[FaultSpec] {
         &self.faults.specs
+    }
+
+    /// Is fault `id` in the schedule and switched on?
+    #[must_use]
+    pub fn fault_enabled(&self, id: FaultId) -> bool {
+        self.faults
+            .status
+            .get(id.index())
+            .is_some_and(|&s| s != Status::Disabled)
     }
 
     /// Phase 1: end faults whose window closes at `t`, then start those
@@ -186,8 +241,7 @@ impl Sim {
             FaultKind::AisleBlock { .. } => {}
             FaultKind::ChuteJam { chute } => {
                 let c = chute.index();
-                self.faults.jams[c] += 1;
-                if self.faults.jams[c] == 1 {
+                if self.faults.jammed_by[c].is_none() {
                     self.faults.jam_prior[c] = self.world.chutes.state[c];
                     self.world.chutes.state[c] = ChuteState::Jammed;
                     out.push(Event::ChuteChanged {
@@ -197,15 +251,15 @@ impl Sim {
                         state: ChuteState::Jammed,
                     });
                 }
+                self.refresh_jam(chute);
             }
-            FaultKind::InductionOutage { station } => {
-                self.faults.outages[station.index()] += 1;
-            }
+            FaultKind::InductionOutage { station } => self.refresh_outage(station),
             FaultKind::VolumeSurge {
                 station,
                 factor_pct,
             } => {
-                let key = self.faults.specs[i].content_key();
+                let key = self.faults.specs[i].stream_key(id);
+                self.faults.surge_keys.push((key, id));
                 let stations = self.world.stations.cell.len();
                 let targets = station.map_or(0..stations, |s| s.index()..s.index() + 1);
                 for s in targets {
@@ -228,7 +282,7 @@ impl Sim {
         }
     }
 
-    fn end_fault(&mut self, t: Tick, i: usize, out: &mut Vec<Event>) {
+    pub(super) fn end_fault(&mut self, t: Tick, i: usize, out: &mut Vec<Event>) {
         let id = fault_id(i);
         match self.faults.specs[i].kind.clone() {
             FaultKind::RobotFailure { robot } => {
@@ -242,9 +296,9 @@ impl Sim {
             }
             FaultKind::AisleBlock { .. } => {}
             FaultKind::ChuteJam { chute } => {
+                self.refresh_jam(chute);
                 let c = chute.index();
-                self.faults.jams[c] -= 1;
-                if self.faults.jams[c] == 0 {
+                if self.faults.jammed_by[c].is_none() {
                     let state = self.faults.jam_prior[c];
                     self.world.chutes.state[c] = state;
                     out.push(Event::ChuteChanged {
@@ -255,9 +309,7 @@ impl Sim {
                     });
                 }
             }
-            FaultKind::InductionOutage { station } => {
-                self.faults.outages[station.index()] -= 1;
-            }
+            FaultKind::InductionOutage { station } => self.refresh_outage(station),
             FaultKind::VolumeSurge { .. } => self.faults.surges.retain(|s| s.fault != id),
             FaultKind::ScannerDrift { station, .. } => self.refresh_drift(station),
         }
@@ -270,8 +322,28 @@ impl Sim {
             .faults
             .active()
             .find(|(_, f)| f.kind == FaultKind::RobotFailure { robot })
-            .map(|(i, _)| fault_id(i));
+            .map(|(id, _)| id);
         self.faults.failed_by[r] = holder;
+    }
+
+    /// Recompute which active jam (lowest id) holds `chute`.
+    fn refresh_jam(&mut self, chute: ChuteId) {
+        let holder = self
+            .faults
+            .active()
+            .find(|(_, f)| f.kind == FaultKind::ChuteJam { chute })
+            .map(|(id, _)| id);
+        self.faults.jammed_by[chute.index()] = holder;
+    }
+
+    /// Recompute which active outage (lowest id) holds `station`.
+    fn refresh_outage(&mut self, station: StationId) {
+        let holder = self
+            .faults
+            .active()
+            .find(|(_, f)| f.kind == FaultKind::InductionOutage { station })
+            .map(|(id, _)| id);
+        self.faults.outage_by[station.index()] = holder;
     }
 
     /// Recompute a station's drifted misread rate: the highest rate among
@@ -291,35 +363,123 @@ impl Sim {
         self.faults.drift_ppm[station.index()] = ppm;
     }
 
-    /// Close the cells of active aisle blocks and dead robots, and rebuild
-    /// the guided distance tables around them (healthy tables when nothing
-    /// is closed). Robots whose goal is cut off then record
-    /// `CellBlocked(topology fault)` in phase 8.
-    fn rebuild_topology(&mut self) {
+    /// Collect the cells closed by active aisle blocks and dead robots, and
+    /// switch to the distance tables for that closed set (the healthy tables
+    /// when nothing is closed; cached tables when the set was seen before).
+    /// Then find the stations the closed cells cut off from the parking
+    /// lane, where idle robots wait for work.
+    pub(super) fn rebuild_topology(&mut self) {
         let g = &self.layout.grid;
-        let mut closed = vec![false; g.len()];
-        let mut any = None::<FaultId>;
-        for (i, f) in self.faults.active() {
-            match &f.kind {
-                FaultKind::AisleBlock { cells } => {
-                    for &c in cells {
-                        closed[g.idx(c) as usize] = true;
-                    }
-                }
-                FaultKind::RobotFailure { robot } => {
-                    closed[self.world.robots.pos[robot.index()] as usize] = true;
-                }
+        let mut closed_by = Vec::new();
+        for (id, f) in self.faults.active() {
+            let cells = match &f.kind {
+                FaultKind::AisleBlock { cells } => cells.iter().map(|&c| g.idx(c)).collect(),
+                FaultKind::RobotFailure { robot } => vec![self.world.robots.pos[robot.index()]],
                 _ => continue,
-            }
-            any = any.or(Some(fault_id(i)));
+            };
+            closed_by.push((id, cells));
         }
-        self.faults.topology = any;
-        let closed: &[bool] = if any.is_some() { &closed } else { &[] };
-        self.distances = DistanceTables::build_with_closed(
+        let flatten = |by: &[(FaultId, Vec<CellIdx>)]| {
+            let mut all: Vec<CellIdx> = by.iter().flat_map(|(_, c)| c.iter().copied()).collect();
+            all.sort_unstable();
+            all.dedup();
+            all
+        };
+        // Closed cells never move while their fault holds (a dead robot
+        // stays put), so the previous closures give the previous closed set.
+        let before = flatten(&self.faults.closed_by);
+        let all = flatten(&closed_by);
+        self.faults.closed_by = closed_by;
+        self.faults.row_cache.clear();
+        self.distances = if all.is_empty() {
+            Arc::clone(&self.healthy)
+        } else if let Some((_, t)) = self.faults.table_cache.iter().find(|(c, _)| *c == all) {
+            Arc::clone(t)
+        } else {
+            // Derive from the tables in force, recomputing only the goal
+            // rows the change of closed cells can affect.
+            let mask = |cells: &[CellIdx]| {
+                let mut m = vec![false; g.len()];
+                for &c in cells {
+                    m[c as usize] = true;
+                }
+                m
+            };
+            let (tables, _) = self.distances.with_closed_changed(
+                &self.layout,
+                self.config.guidance.against_flow_cost,
+                &mask(&before),
+                &mask(&all),
+            );
+            let tables = Arc::new(tables);
+            if self.faults.table_cache.len() == TABLE_CACHE {
+                self.faults.table_cache.remove(0);
+            }
+            self.faults
+                .table_cache
+                .push((all.clone(), Arc::clone(&tables)));
+            tables
+        };
+
+        for s in 0..self.faults.station_cut.len() {
+            let goal = Goal::Station(station_id(s));
+            let cut = !all.is_empty()
+                && self
+                    .layout
+                    .parking
+                    .iter()
+                    .all(|&p| self.distances.get(goal, p) == UNREACHABLE);
+            self.faults.station_cut[s] = match self.layout.parking.first() {
+                Some(&p) if cut => Some(self.topology_blame(goal, p, UNREACHABLE)),
+                _ => None,
+            };
+        }
+    }
+
+    /// The topology fault to blame for a robot at `cell` whose guided cost to
+    /// `goal` is `current` on the faulted floor (`UNREACHABLE` when cut off,
+    /// or a detour's length): the lowest-id active topology fault whose
+    /// removal alone would bring the cost below `current`; if none would on
+    /// its own (the faults only cut the route together), the lowest-id
+    /// active topology fault. Requires an active topology fault.
+    pub(super) fn topology_blame(&mut self, goal: Goal, cell: CellIdx, current: u32) -> FaultId {
+        for k in 0..self.faults.closed_by.len() {
+            let row = self.row_without(goal, k);
+            if self.faults.row_cache[row].2[cell as usize] < current {
+                return self.faults.closed_by[k].0;
+            }
+        }
+        self.faults.closed_by.first().map_or(FaultId(0), |c| c.0)
+    }
+
+    /// Index in the row cache of `goal`'s distances with the `k`-th active
+    /// topology fault's cells reopened (the others stay closed).
+    fn row_without(&mut self, goal: Goal, k: usize) -> usize {
+        let f = self.faults.closed_by[k].0;
+        if let Some(i) = self
+            .faults
+            .row_cache
+            .iter()
+            .position(|(g, id, _)| *g == goal && *id == f)
+        {
+            return i;
+        }
+        let mut mask = vec![false; self.layout.grid.len()];
+        for (j, (_, cells)) in self.faults.closed_by.iter().enumerate() {
+            if j != k {
+                for &c in cells {
+                    mask[c as usize] = true;
+                }
+            }
+        }
+        let row = DistanceTables::goal_row(
             &self.layout,
             self.config.guidance.against_flow_cost,
-            closed,
+            goal,
+            &mask,
         );
+        self.faults.row_cache.push((goal, f, row.into()));
+        self.faults.row_cache.len() - 1
     }
 
     /// Phase 2, continued: the extra arrivals of active volume surges, one
@@ -343,10 +503,12 @@ impl Sim {
 
     /// Feed the fault schedule and the state of active faults into the
     /// state hash. Called only when a schedule exists, so a healthy run
-    /// hashes exactly as before faults existed.
+    /// hashes exactly as before faults existed. Caches and the blame state
+    /// derived from the schedule are left out: they never change what
+    /// robots do.
     pub(super) fn hash_faults(&self, h: &mut Fnv1a) {
         let f = &self.faults;
-        h.write(b"faults-v1");
+        h.write(b"faults-v2");
         h.write_u64(f.specs.len() as u64);
         for (spec, status) in f.specs.iter().zip(&f.status) {
             spec.hash_into(h);
@@ -358,12 +520,12 @@ impl Sim {
                 h.write_u8(*state as u8);
             }
         }
-        for (jams, prior) in f.jams.iter().zip(&f.jam_prior) {
-            h.write_u16(*jams);
+        for (jam, prior) in f.jammed_by.iter().zip(&f.jam_prior) {
+            h.write_opt_u32(jam.map(|x| x.0));
             h.write_u8(*prior as u8);
         }
-        for (outages, drift) in f.outages.iter().zip(&f.drift_ppm) {
-            h.write_u16(*outages);
+        for (outage, drift) in f.outage_by.iter().zip(&f.drift_ppm) {
+            h.write_opt_u32(outage.map(|x| x.0));
             h.write_opt_u32(*drift);
         }
         h.write_u64(f.surges.len() as u64);
@@ -393,6 +555,6 @@ impl Sim {
 
     /// Is station `s` dispatching work?
     pub(super) fn station_up(&self, s: usize) -> bool {
-        self.faults.outages.get(s).is_none_or(|&n| n == 0)
+        self.faults.outage_by.get(s).is_none_or(Option::is_none)
     }
 }

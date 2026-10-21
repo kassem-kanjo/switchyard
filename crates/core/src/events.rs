@@ -20,21 +20,45 @@ pub enum WaitCause {
     /// higher-priority robot that pushed it, or that robot took the cell it
     /// wanted (PIBT, see [`crate::pibt`]).
     Yielded(RobotId),
-    /// A fault changed the floor's topology so the robot cannot proceed: its
-    /// goal is cut off by an aisle block or a dead robot (a direct cause), or
-    /// its wait-for chain ends at a robot that failed (a root).
+    /// Cells closed by a fault are in the way. As a direct cause: the fault's
+    /// closed cells (an aisle block, or a dead robot's cell) cut the robot
+    /// off from its goal; the id is the fault that did it (see
+    /// [`crate::faults`] for how a robot cut off by several faults is
+    /// blamed). As a root: the robot's wait-for chain ends at a robot that
+    /// failure `f` stopped. In [`Event::ParcelDelayed`] it also covers detour
+    /// ticks and parcels queued at a station that fault cut off.
     CellBlocked(FaultId),
     /// The robot is at its chute but the chute is swapping bags or jammed.
+    /// When the chute is jammed, the root of the chain is `Fault(jam)`; a
+    /// bag swap is its own root.
     ChuteUnavailable(ChuteId),
     /// The station the robot is heading to is busy loading another robot.
     StationBusy(StationId),
-    /// Only ever a *root*: the robot's wait-for chain ends in a cycle of
-    /// `BlockedBy` edges (robots that all stayed put, each waiting on the
-    /// next). The id is the cycle's canonical member, its lowest robot id.
-    /// A cycle that persists for `planner.deadlock_ticks` is reported as a
-    /// deadlock ([`Event::DeadlockDetected`]); shorter ones are transient
-    /// head-on meetings.
+    /// Only ever a *root*: the robot's wait-for chain ends in a deadlock, a
+    /// cycle of `BlockedBy` edges (robots that all stayed put, each waiting
+    /// on the next) that has persisted for `planner.deadlock_ticks`
+    /// consecutive ticks ([`Event::DeadlockDetected`]). The id is the
+    /// cycle's canonical member, its lowest robot id. A younger cycle is a
+    /// transient head-on meeting and its chains are rooted at
+    /// `BlockedBy(canonical member)` instead.
     Cycle(RobotId),
+    /// A fault holds the robot or parcel directly: the robot has failed
+    /// (direct and root of a failed robot's `RobotWaited`), its chute is
+    /// jammed (root of `ChuteUnavailable`), its station is in an induction
+    /// outage, or its parcel is queued behind a volume surge's parcels
+    /// ([`Event::ParcelDelayed`]).
+    Fault(FaultId),
+}
+
+impl WaitCause {
+    /// The fault this cause blames, if any (`Fault` or `CellBlocked`).
+    #[must_use]
+    pub const fn fault(self) -> Option<FaultId> {
+        match self {
+            Self::Fault(f) | Self::CellBlocked(f) => Some(f),
+            _ => None,
+        }
+    }
 }
 
 /// The state of a chute, reported when it changes.
@@ -66,7 +90,10 @@ pub enum Event {
         /// Where it must go.
         destination: DestinationId,
     },
-    /// A robot was assigned to collect a parcel.
+    /// A robot was assigned to collect a parcel. A claim can be given back:
+    /// when closed cells cut the robot off from the station, the parcel
+    /// returns to `Queued` (a `ParcelPhase` event) and is later assigned
+    /// again, so a parcel can have several `ParcelAssigned` events.
     ParcelAssigned {
         /// When.
         tick: Tick,
@@ -105,10 +132,16 @@ pub enum Event {
     /// an idle or parking robot that has no event of its own.
     ///
     /// Roots: `BlockedBy(b)` for a robot `b` with no cause of its own
-    /// (loading, dropping, at its goal, or idle); `Yielded(b)` (`b` won the
-    /// cell and moved on); `CellBlocked(f)` (an aisle block, or the chain
-    /// ends at a robot that failure `f` stopped); `ChuteUnavailable`;
-    /// `StationBusy`; or `Cycle(m)` for a chain that ends in a cycle.
+    /// (loading, dropping, at its goal, or idle), or the canonical member of
+    /// a transient cycle; `Yielded(b)` (`b` won the cell and moved on);
+    /// `CellBlocked(f)` (closed cells cut the robot off, or the chain ends
+    /// at a robot that failure `f` stopped); `Fault(f)` (the robot failed, or
+    /// its chute is jammed by `f`); `ChuteUnavailable` (a bag swap);
+    /// `StationBusy`; or `Cycle(m)` for a chain that ends in a deadlock.
+    ///
+    /// A failed robot that holds a parcel (claimed or carried) emits
+    /// `RobotWaited { direct: Fault(f), root: Fault(f) }` every tick it is
+    /// down.
     RobotWaited {
         /// When.
         tick: Tick,
@@ -117,6 +150,41 @@ pub enum Event {
         /// Immediate cause.
         direct: WaitCause,
         /// Root cause.
+        root: WaitCause,
+    },
+    /// A fault cost this parcel this tick (one event per parcel per tick at
+    /// most, after the tick's `RobotWaited` events). The invariant: every
+    /// tick of a parcel's life that a fault delayed carries exactly one
+    /// `ParcelDelayed` whose `root` names that fault (`root.fault()` is
+    /// `Some`), whatever the parcel's phase. Emitted when:
+    /// - the parcel's robot (assigned or carrying) waited this tick and its
+    ///   root is a fault (`Fault` or `CellBlocked`): `cause` and `root` are
+    ///   the robot's `RobotWaited` direct and root (a failed robot, a jammed
+    ///   chute, a cut-off goal, a chain ending at a dead robot), in any phase
+    ///   from `AwaitingRobot` to `ChuteWait`;
+    /// - the parcel's chute is jammed and its robot got no closer to it this
+    ///   tick (it is circling or queueing at the chute; robots waiting at a
+    ///   chute can be pushed aside, so they need not record a wait):
+    ///   `cause: ChuteUnavailable(c)`, `root: Fault(jam)`;
+    /// - the parcel's robot moved but on a detour: it got closer to its goal
+    ///   only on the faulted floor, not by the healthy distances, because a
+    ///   fault's closed cells lengthen its route (`CellBlocked(f)`);
+    /// - the parcel is `Queued` at a station in an induction outage
+    ///   (`Fault(outage)`), at a station closed cells cut off from the fleet
+    ///   (`CellBlocked(f)`), or behind a volume surge's parcels in the
+    ///   station queue (`Fault(surge)`, which can outlast the surge itself
+    ///   while its backlog drains).
+    ///
+    /// `Blocked` ticks also have the robot's `RobotWaited`; for fault blame
+    /// this event is the parcel's single source.
+    ParcelDelayed {
+        /// When.
+        tick: Tick,
+        /// The delayed parcel.
+        parcel: ParcelId,
+        /// Immediate cause.
+        cause: WaitCause,
+        /// Root cause; always names a fault.
         root: WaitCause,
     },
     /// A parcel fell into a chute (phase `Dropped`).
@@ -221,6 +289,7 @@ impl Event {
             | Self::ParcelPhase { tick, .. }
             | Self::RobotState { tick, .. }
             | Self::RobotWaited { tick, .. }
+            | Self::ParcelDelayed { tick, .. }
             | Self::ParcelDropped { tick, .. }
             | Self::ParcelMisSorted { tick, .. }
             | Self::ChuteChanged { tick, .. }

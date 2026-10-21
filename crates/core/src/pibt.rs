@@ -313,6 +313,10 @@ impl Planner for PibtPlanner {
         // Stateless between ticks; the tag pins the algorithm version.
         h.write(b"pibt-v2");
     }
+
+    fn box_clone(&self) -> Box<dyn Planner> {
+        Box::new(self.clone())
+    }
 }
 
 /// SplitMix64-style mixing of a robot id and a tick into a well-spread
