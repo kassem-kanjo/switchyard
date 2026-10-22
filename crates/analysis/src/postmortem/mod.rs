@@ -110,6 +110,20 @@ impl Replay {
     }
 }
 
+/// Dither copies tried per wanted copy before giving up (most moving
+/// robots diverge; a few pauses are absorbed).
+pub const DITHER_TRIES: usize = 3;
+
+/// Histories needed for the dither spread to be trusted as a noise band
+/// (#14). With fewer, every band is widened to at least
+/// [`NOISE_FLOOR_PCT`] % of the loss.
+pub const MIN_HISTORIES: usize = 5;
+
+/// The band floor when the dither is too thin, in % of the loss: the CP2
+/// investigation measured a 4–6 % spread under load for jams, failures and
+/// surges.
+pub const NOISE_FLOOR_PCT: f64 = 5.0;
+
 /// A difference counts only beyond this many dither bands (ADR 0006 §6:
 /// "a tie when their ρ differ by less than twice the dither band").
 pub const NOISE_K: f64 = 2.0;
@@ -151,8 +165,12 @@ pub struct PostMortem {
     pub hotspots: Vec<Hotspot>,
     /// Candidate fixes.
     pub fixes: Vec<Fix>,
-    /// Dither robots, one per extra history.
+    /// Dither robots, one per extra history (only copies that diverged).
     pub dither: Vec<RobotId>,
+    /// Dither copies tried, diverging or not.
+    pub dither_tried: usize,
+    /// World hash at the horizon of each history (index 0 = the real one).
+    pub history_hashes: Vec<u64>,
     /// Tick of the dither failures.
     pub dither_tick: Tick,
     /// Every replay: masks `0..2ⁿ` first, then fixes.
@@ -176,10 +194,28 @@ impl PostMortem {
         &self.replays[1 << self.candidates.len()..]
     }
 
-    /// Histories every replay ran on.
+    /// Histories every replay ran on (the real one plus diverging copies).
     #[must_use]
     pub fn histories(&self) -> usize {
         self.dither.len() + 1
+    }
+
+    /// True when too few histories diverged to trust their spread; every
+    /// band is then widened (see [`MIN_HISTORIES`]).
+    #[must_use]
+    pub fn thin_dither(&self) -> bool {
+        self.histories() < MIN_HISTORIES
+    }
+
+    /// `band`, widened to the noise floor when the dither is thin.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn widen(&self, band: f64) -> f64 {
+        if self.thin_dither() {
+            band.max(NOISE_FLOOR_PCT / 100.0 * self.loss().abs() as f64)
+        } else {
+            band
+        }
     }
 
     /// Median delay of the actual shift at the horizon (parcel-ticks).
@@ -193,7 +229,7 @@ impl PostMortem {
     #[allow(clippy::cast_precision_loss)]
     pub fn fix_stats(&self, i: usize) -> (i64, f64) {
         let g = self.fix_gain(i);
-        (median(&g), band(g.iter().map(|&x| x as f64)))
+        (median(&g), self.widen(band(g.iter().map(|&x| x as f64))))
     }
 
     /// Loss recovered by fix `i` on each history (parcel-ticks).
@@ -212,14 +248,14 @@ impl PostMortem {
     /// (parcel-ticks): the noise band.
     #[must_use]
     pub fn share_band(&self, i: usize) -> f64 {
-        band(self.per_history.iter().map(|a| a.shapley(i)))
+        self.widen(band(self.per_history.iter().map(|a| a.shapley(i))))
     }
 
     /// Half the range of the actual history's delay across histories.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn loss_band(&self) -> f64 {
-        band(self.masks()[0].delay.iter().map(|&d| d as f64))
+        self.widen(band(self.masks()[0].delay.iter().map(|&d| d as f64)))
     }
 }
 
@@ -516,22 +552,57 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
         .filter_map(|r| u32::try_from(r).ok().map(RobotId))
         .filter(|r| !busy.contains(r))
         .collect();
+    // A copy counts only if it actually diverges: its world hash at the
+    // horizon must differ from the real history's (a pause can be absorbed,
+    // e.g. by a robot about to wait anyway). Otherwise another robot is
+    // drawn, up to `DITHER_TRIES` per wanted copy (#14).
+    let real_end = {
+        let mut sim = history.at(horizon).clone();
+        while sim.tick() < horizon {
+            ev.clear();
+            sim.step(&mut ev);
+        }
+        sim.live_hash()
+    };
     let extra = options.dither.max(1) - 1;
-    let dither: Vec<RobotId> = (1..=extra)
+    // Evenly spread picks first, then the remaining moving robots in order.
+    let spread: Vec<RobotId> = (1..=extra)
         .filter_map(|d| moving.get(d * moving.len() / (extra + 1)).copied())
         .collect();
-    let dithered: Vec<History> = dither
-        .par_iter()
-        .map(|&robot| {
-            let mut c = actual_cfg.clone();
-            c.faults.push(FaultSpec {
-                at: onset,
-                duration: 1,
-                kind: FaultKind::RobotFailure { robot },
-            });
-            record(&c, horizon, every, |_, _| {}).map(|(h, _)| h)
-        })
-        .collect::<Result<_, _>>()?;
+    let pool: Vec<RobotId> = spread
+        .iter()
+        .copied()
+        .chain(moving.iter().copied().filter(|r| !spread.contains(r)))
+        .take(extra * DITHER_TRIES)
+        .collect();
+    let mut dither: Vec<RobotId> = Vec::new();
+    let mut dithered: Vec<History> = Vec::new();
+    let mut history_hashes = vec![real_end];
+    let mut next = 0;
+    while dither.len() < extra && next < pool.len() {
+        let batch = &pool[next..(next + extra - dither.len()).min(pool.len())];
+        next += batch.len();
+        let tried: Vec<(RobotId, History, u64)> = batch
+            .par_iter()
+            .map(|&robot| {
+                let mut c = actual_cfg.clone();
+                c.faults.push(FaultSpec {
+                    at: onset,
+                    duration: 1,
+                    kind: FaultKind::RobotFailure { robot },
+                });
+                record(&c, horizon, every, |_, _| {}).map(|(h, end)| (robot, h, end.live_hash()))
+            })
+            .collect::<Result<_, _>>()?;
+        for (robot, h, end) in tried {
+            if end != real_end {
+                dither.push(robot);
+                dithered.push(h);
+                history_hashes.push(end);
+            }
+        }
+    }
+    let dither_tried = next;
     let histories: Vec<&History> = std::iter::once(&history).chain(&dithered).collect();
 
     // 5. Every (change, history) replay, in parallel, collected in order.
@@ -602,6 +673,8 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
         hotspots,
         fixes,
         dither,
+        dither_tried,
+        history_hashes,
         dither_tick: onset,
         replays,
         attribution: Attribution::new(&median_game),

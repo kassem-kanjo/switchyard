@@ -72,3 +72,35 @@ fn b_identical_jams_are_reported_as_redundant() {
         "{line}"
     );
 }
+
+/// Dither copies that do not diverge are no-ops that shrink the noise band:
+/// only diverging copies count, and the report gives the effective count
+/// (#14).
+#[test]
+fn dither_counts_only_copies_that_diverge() {
+    let mut c = base(2);
+    let a = chute_of_dest(&c, 0);
+    c.faults
+        .push(f(20 * MIN, 15 * MIN, FaultKind::ChuteJam { chute: a }));
+    let (pm, md) = run(&c, 45 * MIN, 4);
+    assert_eq!(pm.history_hashes.len(), pm.histories());
+    assert!(pm.histories() > 1, "{md}");
+    assert!(
+        pm.history_hashes[1..]
+            .iter()
+            .all(|&h| h != pm.history_hashes[0]),
+        "{:?}",
+        pm.history_hashes
+    );
+    assert!(pm.dither_tried >= pm.dither.len());
+    assert!(
+        md.contains(&format!("(of {} tried)", pm.dither_tried)),
+        "{md}"
+    );
+    // Fewer than 5 histories: the bands are widened, and the report says so.
+    assert!(pm.thin_dither());
+    assert!(md.contains("widened to at least 5 % of the loss"), "{md}");
+    #[allow(clippy::cast_precision_loss)]
+    let floor = 0.05 * pm.loss() as f64;
+    assert!(pm.loss_band() >= floor - 1e-9);
+}
