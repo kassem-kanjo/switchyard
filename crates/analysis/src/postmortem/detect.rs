@@ -119,6 +119,29 @@ pub fn detect(twin: &[u32], actual: &[u32], params: &CusumParams) -> Option<Inci
     })
 }
 
+/// Every incident of `actual` against `twin`, in time order. After an
+/// incident closes the CUSUM restarts from zero on the rest of the run, so a
+/// later, separate dip is not lost behind the first (#15).
+#[must_use]
+pub fn detect_all(twin: &[u32], actual: &[u32], params: &CusumParams) -> Vec<Incident> {
+    let mut incidents = Vec::new();
+    let mut off = 0;
+    while off < twin.len() {
+        let Some(inc) = detect(&twin[off..], &actual[off..], params) else {
+            break;
+        };
+        let end = inc.end + off;
+        incidents.push(Incident {
+            start: inc.start + off,
+            alarm: inc.alarm + off,
+            end,
+            ..inc
+        });
+        off = end;
+    }
+    incidents
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +189,30 @@ mod tests {
         let actual: Vec<u32> = (0..60).map(|t| if t % 2 == 0 { 85 } else { 115 }).collect();
         assert_eq!(detect(&twin, &actual, &CusumParams::default()), None);
         assert_eq!(detect(&[0; 5], &[0; 5], &CusumParams::default()), None);
+    }
+
+    #[test]
+    fn two_separated_dips_give_two_incidents() {
+        // A 3-minute dip at 60/min builds 16.5σ, which takes 33 quiet minutes
+        // to drain after the alarm (k = 0.5/min), so the second dip must start
+        // after minute 38 for the first window to have closed.
+        let twin = [100u32; 90];
+        let mut actual = [100u32; 90];
+        actual[3..6].fill(40);
+        actual[50..53].fill(40);
+        let p = CusumParams::default();
+        let all = detect_all(&twin, &actual, &p);
+        assert_eq!(all.len(), 2);
+        let first = detect(&twin, &actual, &p).unwrap();
+        assert_eq!(all[0], first);
+        assert!(all[1].alarm >= 30);
+        assert!(all[1].start >= first.end);
+        assert!(all[0].settled && all[1].settled);
+    }
+
+    #[test]
+    fn detect_all_is_empty_without_an_incident() {
+        assert!(detect_all(&[100u32; 60], &[100u32; 60], &CusumParams::default()).is_empty());
     }
 
     /// Calibration of `h` (see the module docs). Slow: run in release with

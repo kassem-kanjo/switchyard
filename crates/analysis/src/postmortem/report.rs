@@ -407,6 +407,17 @@ pub fn render(pm_: &PostMortem) -> String {
             " (still open when the run ended)"
         }
     );
+    // Only the largest incident is analysed; say so about the others rather
+    // than drop them silently (#15). The CLI has no flag to pick an incident
+    // yet, so there is no command to suggest.
+    for &tick in &pm_.other_incidents {
+        let _ = writeln!(
+            o,
+            "\nAnother alarm at {} was not analysed (this report covers the largest incident \
+             of the run) [A, T].",
+            clock(tick)
+        );
+    }
     let _ = writeln!(o, "\n## Resolution\n");
     let _ = writeln!(
         o,
@@ -695,6 +706,18 @@ mod tests {
             att.scale * i128::from(att.total())
         );
         insta::assert_snapshot!(render(&pm));
+    }
+
+    #[test]
+    fn other_alarms_are_listed_as_not_analysed() {
+        let mut pm = small_incident();
+        assert!(!render(&pm).contains("Another alarm"));
+        pm.other_incidents = vec![90 * TICKS_PER_MINUTE];
+        let md = render(&pm);
+        assert!(
+            md.contains("Another alarm at 01:30 was not analysed"),
+            "{md}"
+        );
     }
 
     #[test]

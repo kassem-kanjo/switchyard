@@ -124,6 +124,25 @@ pub const MIN_HISTORIES: usize = 5;
 /// surges.
 pub const NOISE_FLOOR_PCT: f64 = 5.0;
 
+/// Deliveries an incident's window lost against the twin (net of the backlog
+/// drain inside it): the size used to pick which incident to analyse.
+fn incident_loss(twin: &[u32], actual: &[u32], inc: &Incident) -> i64 {
+    let end = inc.end.min(twin.len()).min(actual.len());
+    (inc.start..end)
+        .map(|t| i64::from(twin[t]) - i64::from(actual[t]))
+        .sum()
+}
+
+/// Index of the incident that lost most deliveries; the earliest wins a tie
+/// (`max_by_key` keeps the last maximum, hence the reversed index).
+fn largest_incident(twin: &[u32], actual: &[u32], incidents: &[Incident]) -> Option<usize> {
+    incidents
+        .iter()
+        .enumerate()
+        .max_by_key(|(i, inc)| (incident_loss(twin, actual, inc), std::cmp::Reverse(*i)))
+        .map(|(i, _)| i)
+}
+
 /// A difference counts only beyond this many dither bands (ADR 0006 §6:
 /// "a tie when their ρ differ by less than twice the dither band").
 pub const NOISE_K: f64 = 2.0;
@@ -145,6 +164,9 @@ pub struct PostMortem {
     pub options: Options,
     /// The incident, if the CUSUM alarmed.
     pub incident: Option<Incident>,
+    /// Onset ticks of the other alarms of the run, in time order. Only the
+    /// largest incident is analysed; the report lists the rest (#15).
+    pub other_incidents: Vec<Tick>,
     /// Largest CUSUM value over the whole run (σ units).
     pub cusum_peak: f64,
     /// Scoring horizon (tick).
@@ -448,11 +470,17 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
     let (history, actual_series, actual_parcels, blame, failures, timeline) = actual?;
 
     // 2. Detection, window, horizon.
-    let incident = detect::detect(
+    let incidents = detect::detect_all(
         &twin_run.series.delivered_regular,
         &actual_series.delivered_regular,
         &options.cusum,
     );
+    let main = largest_incident(
+        &twin_run.series.delivered_regular,
+        &actual_series.delivered_regular,
+        &incidents,
+    );
+    let incident = main.map(|i| incidents[i]);
     let cusum_peak = detect::cusum(
         &twin_run.series.delivered_regular,
         &actual_series.delivered_regular,
@@ -461,6 +489,12 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
     .into_iter()
     .fold(0.0, f64::max);
     let minute = minute_tick;
+    let other_incidents: Vec<Tick> = incidents
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != main)
+        .map(|(_, inc)| minute(inc.start))
+        .collect();
     let (window_start, window_end, horizon) = match &incident {
         Some(inc) => (
             minute(inc.start),
@@ -662,6 +696,7 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
         ticks,
         options: *options,
         incident,
+        other_incidents,
         cusum_peak,
         horizon,
         twin_series: twin_run.series,
@@ -713,5 +748,32 @@ pub fn describe_kind(kind: &FaultKind) -> String {
             "scanner at station {station} misreads {:.1} %",
             f64::from(*error_rate_ppm) / 10_000.0
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect::{CusumParams, detect_all};
+    use super::largest_incident;
+
+    #[test]
+    fn the_largest_incident_is_analysed_and_a_tie_goes_to_the_earliest() {
+        let p = CusumParams::default();
+        let twin = [100u32; 120];
+        // A short dip, then a deeper and longer one.
+        let mut actual = [100u32; 120];
+        actual[3..6].fill(60);
+        actual[60..66].fill(30);
+        let all = detect_all(&twin, &actual, &p);
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert_eq!(largest_incident(&twin, &actual, &all), Some(1));
+        // The same dip twice: equal loss, so the first.
+        let mut same = [100u32; 120];
+        same[3..6].fill(40);
+        same[70..73].fill(40);
+        let all = detect_all(&twin, &same, &p);
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert_eq!(largest_incident(&twin, &same, &all), Some(0));
+        assert_eq!(largest_incident(&twin, &twin, &[]), None);
     }
 }
