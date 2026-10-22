@@ -178,7 +178,7 @@ pub fn render(pm_: &PostMortem) -> String {
                 )
             })
             .collect();
-        let _ = write!(o, "{}.", capitalise(&parts.join("; ")));
+        let _ = write!(o, "{}", cause_sentence(&parts, &lattice));
         let unexplained = loss - total;
         let _ = writeln!(
             o,
@@ -699,6 +699,19 @@ const fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str
     if n == 1 { one } else { many }
 }
 
+/// The summary's cause sentence. Every cause can be within noise while
+/// their sum is not (several small causes): say so instead of printing an
+/// empty sentence.
+fn cause_sentence(parts: &[String], lattice: &str) -> String {
+    if parts.is_empty() {
+        format!(
+            "No single cause stands out of the noise; together they explain the loss [{lattice}]."
+        )
+    } else {
+        format!("{}.", capitalise(&parts.join("; ")))
+    }
+}
+
 /// Responsibility `1/(1+k)` for contingency size `k` (`None`: never pivotal).
 fn resp_text(k: Option<u32>) -> String {
     match k {
@@ -827,6 +840,18 @@ mod tests {
         assert!(
             md.contains("Another alarm at 01:30 was not analysed"),
             "{md}"
+        );
+    }
+
+    #[test]
+    fn the_cause_sentence_is_never_empty() {
+        assert_eq!(
+            cause_sentence(&[], "R0–R3"),
+            "No single cause stands out of the noise; together they explain the loss [R0–R3]."
+        );
+        assert_eq!(
+            cause_sentence(&["a explains 9 %".to_owned()], "R0–R1"),
+            "A explains 9 %."
         );
     }
 
