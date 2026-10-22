@@ -150,3 +150,33 @@ fn dither_copies_are_distinct_robots_and_distinct_worlds() {
         pm.history_hashes
     );
 }
+
+/// #15 (review): two separate jams give two incidents; the report names the
+/// one not analysed by its CUSUM alarm time, matching "alarmed at" for the
+/// analysed one (not its window start).
+#[test]
+fn the_incident_not_analysed_is_named_by_its_alarm() {
+    let mut c = ScenarioConfig::from_toml_str(presets::SMALL_TOML).unwrap();
+    let busy = chute_of_dest(&c, 0);
+    c.faults = vec![
+        f(10 * MIN, 10 * MIN, FaultKind::ChuteJam { chute: busy }),
+        f(70 * MIN, 15 * MIN, FaultKind::ChuteJam { chute: busy }),
+    ];
+    let (pm, md) = run(&c, 120 * MIN, 1);
+    let all = postmortem::detect::detect_all(
+        &pm.twin_series.delivered_regular,
+        &pm.actual_series.delivered_regular,
+        &pm.options.cusum,
+    );
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(pm.other_incidents.len(), 1, "{md}");
+    let main = pm.incident.unwrap();
+    let other = all.iter().find(|i| **i != main).unwrap();
+    let alarm = Tick::try_from(other.alarm).unwrap() * MIN;
+    assert_eq!(pm.other_incidents, vec![alarm]);
+    let clock = format!("{:02}:{:02}", other.alarm / 60, other.alarm % 60);
+    assert!(
+        md.contains(&format!("Another alarm at {clock} was not analysed")),
+        "{md}"
+    );
+}

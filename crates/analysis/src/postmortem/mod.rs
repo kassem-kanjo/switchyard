@@ -183,7 +183,7 @@ pub struct PostMortem {
     pub options: Options,
     /// The incident, if the CUSUM alarmed.
     pub incident: Option<Incident>,
-    /// Onset ticks of the other alarms of the run, in time order. Only the
+    /// Alarm ticks of the other incidents of the run, in time order. Only the
     /// largest incident is analysed; the report lists the rest (#15).
     pub other_incidents: Vec<Tick>,
     /// Largest CUSUM value over the whole run (σ units).
@@ -512,7 +512,7 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
         .iter()
         .enumerate()
         .filter(|(i, _)| Some(*i) != main)
-        .map(|(_, inc)| minute(inc.start))
+        .map(|(_, inc)| minute(inc.alarm))
         .collect();
     let (window_start, window_end, horizon) = match &incident {
         Some(inc) => (
