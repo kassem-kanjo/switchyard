@@ -53,6 +53,9 @@ pub struct ScenarioConfig {
     /// Planner safety nets.
     #[serde(default)]
     pub planner: PlannerConfig,
+    /// How the floor responds to faults (`[recovery]`).
+    #[serde(default)]
+    pub recovery: RecoveryConfig,
     /// The fault schedule (`[[faults]]`), empty for a healthy run. Faults are
     /// opt-in: a scenario without them simulates exactly as before. See
     /// [`crate::faults`] for the kinds and their healthy counterparts.
@@ -221,6 +224,26 @@ pub struct ScannerConfig {
     /// Real baselines are 100-1,000 ppm (0.01-0.1 %); the default is 0 so
     /// that mis-sorts appear only when a scenario asks for them.
     pub error_rate_ppm: u32,
+}
+
+/// How operators respond to faults (`[recovery]`). Only matters when the
+/// scenario has faults.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RecoveryConfig {
+    /// A robot that fails on an induction cell blocks its station. After
+    /// this many ticks (default 600 = 5 minutes) operators push it to the
+    /// nearest free cell; it stays failed (and keeps its parcel) until its
+    /// fault ends. `u32::MAX` never clears it.
+    pub clear_after_ticks: u32,
+}
+
+impl Default for RecoveryConfig {
+    fn default() -> Self {
+        Self {
+            clear_after_ticks: 600,
+        }
+    }
 }
 
 /// Lane guidance (ADR 0003).

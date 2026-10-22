@@ -115,7 +115,7 @@ fn two_dead_robots_and_a_jam_matches_the_core_numbers() {
     let run = check("two-dead-robots-and-a-jam");
     let idx = blame(&run.traces);
     let got: Vec<u64> = (0..3).map(|i| idx.fault_delay(FaultId(i))).collect();
-    assert_eq!(got, [53_383, 311_249, 340_696]);
+    assert_eq!(got, [90_366, 24_006, 21_829]);
 }
 
 #[test]

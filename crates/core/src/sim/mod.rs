@@ -178,8 +178,6 @@ pub struct Sim {
     /// Robots on a detour this tick (closer to their goal only on the
     /// faulted floor), with the cell they left.
     detour: Vec<Option<CellIdx>>,
-    /// Robots that got closer to their goal this tick.
-    progressed: Vec<bool>,
     idle: Vec<u32>,
 }
 
@@ -317,7 +315,6 @@ impl Sim {
             at_chute: Vec::new(),
             cut_by: Vec::new(),
             detour: Vec::new(),
-            progressed: Vec::new(),
             idle: Vec::with_capacity(n),
         };
         sim.size_per_robot();
@@ -333,9 +330,9 @@ impl Sim {
         self.at_chute.resize(n, false);
         self.cut_by.resize(n, None);
         self.detour.resize(n, None);
-        self.progressed.resize(n, false);
         self.faults.failed_by.resize(n, None);
         self.faults.pre_fail.resize(n, RobotState::Idle);
+        self.faults.failed_since.resize(n, 0);
     }
 
     /// The scenario this sim was built from.
@@ -526,6 +523,7 @@ impl Sim {
         p.robot.push(None);
         p.target.push(None);
         p.chute.push(None);
+        p.misread.push(false);
         self.world.stations.queue[s].push_back(parcel);
         self.arrived += 1;
         out.push(Event::ParcelArrived {
@@ -604,7 +602,8 @@ impl Sim {
     /// parcel's draw key and always taken, so a parcel's scan outcome depends
     /// only on the parcel and the rate in force when it is scanned: a
     /// scanner-drift fault changes the parcels scanned during it and no
-    /// others.
+    /// others. A misread is recorded in `parcels.misread`, which is what
+    /// makes the drop a mis-sort.
     fn scan(&mut self, parcel: ParcelId) -> ChuteId {
         let i = parcel.index();
         let station = self.world.parcels.station[i];
@@ -619,6 +618,7 @@ impl Sim {
         if roll >= u64::from(ppm) || chutes < 2 {
             return correct;
         }
+        self.world.parcels.misread[i] = true;
         chute_id(usize::try_from((u64::from(correct.0) + offset) % chutes).unwrap_or(0))
     }
 
@@ -653,7 +653,7 @@ impl Sim {
             chute,
         });
         let expected = self.world.parcels.destination[parcel.index()];
-        if self.world.destination_chute[expected.index()] != chute {
+        if self.world.parcels.misread[parcel.index()] {
             self.mis_sorted += 1;
             out.push(Event::ParcelMisSorted {
                 tick: t,
@@ -739,7 +739,6 @@ impl Sim {
             let to = self.plan_out.next[r];
             self.world.robots.pos[r] = to;
             self.detour[r] = None;
-            self.progressed[r] = false;
             let Some(goal) = self.plan_goal[r] else {
                 // A carried parcel whose chute is cut off is blocked (one
                 // that is waiting at the chute keeps waiting there).
@@ -755,7 +754,6 @@ impl Sim {
             let d_to = self.distances.get(goal, to);
             if goal != Goal::Park && d_to < self.distances.get(goal, from) {
                 self.last_progress = t;
-                self.progressed[r] = true;
                 // Progress on the faulted floor but not on the healthy one:
                 // the robot is going round closed cells.
                 if self.faults.topology_active()

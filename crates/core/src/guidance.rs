@@ -544,7 +544,7 @@ impl Dijkstra {
 mod tests {
     use super::*;
     use crate::config::FloorConfig;
-    use crate::grid::Pos;
+    use crate::grid::{Cell, Pos};
     use crate::ids::StationId;
     use crate::layout::{self, generate};
 
@@ -763,6 +763,97 @@ mod tests {
                 let (inc, _) = tables.with_closed_changed(&l, 3, &mask, &next);
                 proptest::prop_assert_eq!(&inc, &DistanceTables::build_with_closed(&l, 3, &next));
                 tables = inc;
+                mask = next;
+            }
+        }
+    }
+
+    /// Two floor sizes for the repair property tests.
+    fn floor(big: bool) -> Layout {
+        let (width, height, stations) = if big { (34, 31, 5) } else { (22, 24, 3) };
+        generate(&FloorConfig {
+            width,
+            height,
+            stations,
+            south_margin: 4,
+        })
+        .unwrap()
+    }
+
+    /// The cells of a `w x h` rectangle at `(x, y)` that can be closed:
+    /// open floor and induction cells (a dead robot can stand on a
+    /// station).
+    fn cluster(l: &Layout, x: u16, y: u16, w: u16, h: u16) -> Vec<usize> {
+        let g = &l.grid;
+        let mut cells = Vec::new();
+        for yy in y..(y + h).min(g.height()) {
+            for xx in x..(x + w).min(g.width()) {
+                let c = g.idx(Pos::new(xx, yy));
+                if matches!(g.cell(c), Cell::Free | Cell::Induction(_)) {
+                    cells.push(c as usize);
+                }
+            }
+        }
+        cells
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+        /// Clustered closures (aisle blocks), induction cells included, both
+        /// guidance settings (`k = 1` disables lanes), two floor sizes:
+        /// close clusters one by one (deletion repairs), then open them in
+        /// another order (insertion repairs), then swap one cluster for
+        /// another in one step (mixed change). Every step equals a full
+        /// build.
+        #[test]
+        fn clustered_repairs_equal_full_builds(
+            big in proptest::bool::ANY,
+            guided in proptest::bool::ANY,
+            rects in proptest::collection::vec((0u16..34, 0u16..31, 1u16..4, 1u16..9), 1..4),
+            station_hit in proptest::bool::ANY,
+        ) {
+            let l = floor(big);
+            let k = if guided { 3 } else { 1 };
+            let n = l.grid.len();
+            let mut clusters: Vec<Vec<usize>> =
+                rects.iter().map(|&(x, y, w, h)| cluster(&l, x, y, w, h)).collect();
+            if station_hit {
+                // Always cover an induction cell in one test case of two.
+                clusters.push(vec![l.stations[0] as usize]);
+            }
+            let check = |tables: &DistanceTables, mask: &[bool]| {
+                proptest::prop_assert_eq!(tables, &DistanceTables::build_with_closed(&l, k, mask));
+                Ok(())
+            };
+            let mut mask = vec![false; n];
+            let mut tables = DistanceTables::build(&l, k);
+            for cl in &clusters {
+                let mut next = mask.clone();
+                for &c in cl {
+                    next[c] = true;
+                }
+                tables = tables.with_closed_changed(&l, k, &mask, &next).0;
+                check(&tables, &next)?;
+                mask = next;
+            }
+            // Mixed: reopen the first cluster and close a fresh one at once.
+            let mut next = mask.clone();
+            for &c in &clusters[0] {
+                next[c] = false;
+            }
+            for c in cluster(&l, 1, 1, 6, 2) {
+                next[c] = true;
+            }
+            tables = tables.with_closed_changed(&l, k, &mask, &next).0;
+            check(&tables, &next)?;
+            mask = next;
+            for cl in clusters.iter().rev() {
+                let mut next = mask.clone();
+                for &c in cl {
+                    next[c] = false;
+                }
+                tables = tables.with_closed_changed(&l, k, &mask, &next).0;
+                check(&tables, &next)?;
                 mask = next;
             }
         }

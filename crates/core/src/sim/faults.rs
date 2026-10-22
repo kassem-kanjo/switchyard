@@ -72,6 +72,8 @@ pub(super) struct Faults {
     pub failed_by: Vec<Option<FaultId>>,
     /// Per robot: its state when it failed, restored on repair.
     pub pre_fail: Vec<RobotState>,
+    /// Per robot: the tick it failed (meaningful while it is failed).
+    pub failed_since: Vec<Tick>,
     /// Per chute: the active jam holding it (lowest id), and the state the
     /// jam interrupted.
     pub jammed_by: Vec<Option<FaultId>>,
@@ -164,6 +166,9 @@ impl Sim {
             )));
         }
         let id = fault_id(self.faults.specs.len());
+        if self.config.faults.len() == self.faults.specs.len() {
+            self.config.faults.push(spec.clone());
+        }
         self.faults.specs.push(spec);
         self.faults.status.push(Status::Pending);
         Ok(id)
@@ -214,9 +219,98 @@ impl Sim {
                 self.start_fault(t, i, out);
             }
         }
+        topology |= self.clear_blocked_inductions(t, out);
         if topology {
             self.rebuild_topology();
         }
+    }
+
+    /// Operators clear robots that have been down on an induction cell for
+    /// `recovery.clear_after_ticks`: each moves to the nearest free cell
+    /// (breadth-first over open floor not closed by a fault and not
+    /// occupied, neighbours in `DIRS` order, so the choice is
+    /// deterministic). Returns whether any robot moved.
+    fn clear_blocked_inductions(&mut self, t: Tick, out: &mut Vec<Event>) -> bool {
+        let after = self.config.recovery.clear_after_ticks;
+        // A failed robot is always a closure; none means nothing to clear.
+        if after == u32::MAX || self.faults.closed_by.is_empty() {
+            return false;
+        }
+        let mut taken: Option<Vec<bool>> = None;
+        let mut moved = false;
+        for r in 0..self.world.robots.len() {
+            if self.faults.failed_by[r].is_none()
+                || t.saturating_sub(self.faults.failed_since[r]) < after
+            {
+                continue;
+            }
+            let here = self.world.robots.pos[r];
+            let crate::grid::Cell::Induction(station) = self.layout.grid.cell(here) else {
+                continue;
+            };
+            let taken = taken.get_or_insert_with(|| self.taken_cells());
+            let Some(to) = self.nearest_free_cell(here, taken) else {
+                continue;
+            };
+            taken[to as usize] = true;
+            self.world.robots.pos[r] = to;
+            out.push(Event::RobotCleared {
+                tick: t,
+                robot: robot_id(r),
+                station,
+            });
+            moved = true;
+        }
+        moved
+    }
+
+    /// Per cell: is it unavailable to place a robot on (a robot stands on
+    /// it, failed ones included, or an active fault closes it)? The one rule
+    /// for clearing failed robots and for adding robots.
+    pub(super) fn taken_cells(&self) -> Vec<bool> {
+        let mut taken = vec![false; self.layout.grid.len()];
+        for &p in &self.world.robots.pos {
+            taken[p as usize] = true;
+        }
+        for (_, cells) in &self.faults.closed_by {
+            for &c in cells {
+                taken[c as usize] = true;
+            }
+        }
+        taken
+    }
+
+    /// The failure whose robot stands on station `s`'s induction cell (an
+    /// active closure on that cell: aisle blocks only close open floor).
+    pub(super) fn station_blocker(&self, s: usize) -> Option<FaultId> {
+        let cell = self.world.stations.cell[s];
+        self.faults
+            .closed_by
+            .iter()
+            .find(|(_, cells)| cells.contains(&cell))
+            .map(|&(id, _)| id)
+    }
+
+    /// The nearest open-floor cell to `from` that is not `taken`, by
+    /// breadth-first search in `DIRS` order.
+    fn nearest_free_cell(&self, from: CellIdx, taken: &[bool]) -> Option<CellIdx> {
+        let g = &self.layout.grid;
+        let blocked = taken;
+        let mut seen = vec![false; g.len()];
+        let mut queue = std::collections::VecDeque::from([from]);
+        seen[from as usize] = true;
+        while let Some(c) = queue.pop_front() {
+            if c != from && !blocked[c as usize] {
+                return Some(c);
+            }
+            for n in g.neighbours(c) {
+                if !seen[n as usize] && g.is_free(n) {
+                    seen[n as usize] = true;
+                    queue.push_back(n);
+                }
+            }
+        }
+        None
     }
 
     fn start_fault(&mut self, t: Tick, i: usize, out: &mut Vec<Event>) {
@@ -226,6 +320,7 @@ impl Sim {
                 let r = robot.index();
                 if self.faults.failed_by[r].is_none() {
                     self.faults.pre_fail[r] = self.world.robots.state[r];
+                    self.faults.failed_since[r] = t;
                     self.set_robot_state(t, r, RobotState::Failed, out);
                     // A parcel on its way to the chute is now stuck (one
                     // being loaded or dropped stays in that phase).
@@ -289,8 +384,7 @@ impl Sim {
                 let r = robot.index();
                 self.refresh_failure(r);
                 if self.faults.failed_by[r].is_none() {
-                    // Repaired: resume exactly what it was doing.
-                    let state = self.faults.pre_fail[r];
+                    let state = self.resume_state(r);
                     self.set_robot_state(t, r, state, out);
                 }
             }
@@ -312,6 +406,26 @@ impl Sim {
             FaultKind::InductionOutage { station } => self.refresh_outage(station),
             FaultKind::VolumeSurge { .. } => self.faults.surges.retain(|s| s.fault != id),
             FaultKind::ScannerDrift { station, .. } => self.refresh_drift(station),
+        }
+    }
+
+    /// The state a repaired robot resumes: what it was doing, unless it was
+    /// moved meanwhile (cleared off an induction cell). A loader away from
+    /// its station drives back (`ToInduction`, goal unchanged) and loads
+    /// again on arrival; its parcel stays in `Loading`, so the lifecycle
+    /// order holds. A dropper away from its chute gives up the drop slot
+    /// and drives back (`ToChute`); its parcel stays in `ChuteWait`.
+    fn resume_state(&mut self, r: usize) -> RobotState {
+        let state = self.faults.pre_fail[r];
+        let pos = self.world.robots.pos[r];
+        let at_goal = self.world.robots.goal[r].is_some_and(|g| self.distances.get(g, pos) == 0);
+        match (state, self.world.robots.goal[r]) {
+            (RobotState::Loading, Some(Goal::Station(_))) if !at_goal => RobotState::ToInduction,
+            (RobotState::Dropping, Some(Goal::Chute(c))) if !at_goal => {
+                self.world.chutes.incoming[c.index()] -= 1;
+                RobotState::ToChute
+            }
+            _ => state,
         }
     }
 
@@ -514,10 +628,11 @@ impl Sim {
             spec.hash_into(h);
             h.write_u8(*status as u8);
         }
-        for (failed, state) in f.failed_by.iter().zip(&f.pre_fail) {
+        for (r, (failed, state)) in f.failed_by.iter().zip(&f.pre_fail).enumerate() {
             h.write_opt_u32(failed.map(|x| x.0));
             if failed.is_some() {
                 h.write_u8(*state as u8);
+                h.write_u32(f.failed_since[r]);
             }
         }
         for (jam, prior) in f.jammed_by.iter().zip(&f.jam_prior) {
@@ -533,6 +648,7 @@ impl Sim {
             h.write_u32(s.fault.0);
             h.write_u16(s.station.0);
             h.write_u32(s.key);
+            h.write_u32(s.table.per_hour());
             h.write_u32(s.count);
             h.write_u128(s.stream.word_pos());
         }

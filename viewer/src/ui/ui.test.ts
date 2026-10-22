@@ -1,9 +1,9 @@
 import { theme } from "../theme";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatReadout, hoverReadout, indexAt, makeScale, niceCeil, tickToIndex, yTicks } from "./chartMath";
 import { blameChain, describeSpan, formatDuration, parseParcelId, summarize } from "./traceFormat";
 import { DURATION_KEY, remainingFraction, validateFault } from "./faultValidation";
-import { parseInline, parseMarkdown } from "./markdown";
+import { parseInline, parseMarkdown, renderMarkdown } from "./markdown";
 import { pickRobot } from "./pick";
 import { MOCK_FAULT_KINDS, MockWorld, createMockServices } from "../data/mock";
 import type { ParcelTrace, TraceSpan } from "../data/types";
@@ -234,5 +234,79 @@ describe("mock data", () => {
 
   it("MockWorld without the seeded incident has no loss", () => {
     expect(new MockWorld(() => 0, false).lossAt(10)).toBe(0);
+  });
+
+  const TABLE = [
+    "| # | Condition | Share |",
+    "|---|:--|--:|",
+    "| 1 | Dead robot `R31` | **78 %** |",
+    "| 2 | a \\| b | 3 % |",
+    "",
+    "after",
+  ].join("\n");
+
+  it("parses GitHub-style tables: header, alignment row, body rows", () => {
+    const [t, after] = parseMarkdown(TABLE);
+    expect(t?.t).toBe("table");
+    if (t?.t !== "table") return;
+    expect(t.align).toEqual([null, "left", "right"]);
+    expect(t.head.map((c) => c[0])).toEqual([
+      { t: "text", v: "#" },
+      { t: "text", v: "Condition" },
+      { t: "text", v: "Share" },
+    ]);
+    expect(t.rows).toHaveLength(2);
+    expect(t.rows[0]![1]).toEqual([
+      { t: "text", v: "Dead robot " },
+      { t: "code", v: "R31" },
+    ]);
+    expect(t.rows[0]![2]).toEqual([{ t: "bold", v: "78 %" }]);
+    expect(t.rows[1]![1]).toEqual([{ t: "text", v: "a | b" }]);
+    expect(after!.t).toBe("p");
+  });
+
+  it("pads ragged rows and ignores pipes that are not tables", () => {
+    const [t] = parseMarkdown("a | b\n--|--\nonly |\nProse after.");
+    expect(t?.t === "table" && t.rows[0]!.length).toBe(2);
+    expect(parseMarkdown("just a | pipe\nnext line")[0]!.t).toBe("p");
+    expect(parseMarkdown("| a | b |\n|---|\n| 1 | 2 |")[0]!.t).toBe("p"); // widths differ
+  });
+
+  it("renders tables as DOM with textContent only", () => {
+    class FakeEl {
+      children: FakeEl[] = [];
+      style: Record<string, string> = {};
+      className = "";
+      textContent = "";
+      constructor(public tag: string) {}
+      append(...n: FakeEl[]) {
+        this.children.push(...n);
+      }
+      replaceChildren() {
+        this.children = [];
+      }
+    }
+    vi.stubGlobal("document", {
+      createElement: (tag: string) => new FakeEl(tag),
+      createTextNode: (v: string) => Object.assign(new FakeEl("#text"), { textContent: v }),
+    });
+    try {
+      const root = new FakeEl("div");
+      renderMarkdown("| a | b |\n|:-:|--:|\n| <b>x</b> | **y** |", root as unknown as HTMLElement);
+      const wrap = root.children[0]!;
+      expect(wrap.className).toBe("table-wrap");
+      const table = wrap.children[0]!;
+      expect(table.tag).toBe("table");
+      const [thead, tbody] = table.children;
+      expect([thead!.tag, tbody!.tag]).toEqual(["thead", "tbody"]);
+      const ths = thead!.children[0]!.children;
+      expect(ths.map((c) => c.tag)).toEqual(["th", "th"]);
+      expect(ths.map((c) => c.style.textAlign)).toEqual(["center", "right"]);
+      const tds = tbody!.children[0]!.children;
+      expect(tds[0]!.children[0]!.textContent).toBe("<b>x</b>"); // literal text, no markup
+      expect(tds[1]!.children[0]!.tag).toBe("strong");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

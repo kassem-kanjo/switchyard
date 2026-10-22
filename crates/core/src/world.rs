@@ -136,6 +136,10 @@ pub struct Parcels {
     pub target: Vec<Option<ChuteId>>,
     /// Chute it was dropped into, once dropped.
     pub chute: Vec<Option<ChuteId>>,
+    /// True if the scanner misread the parcel (it goes to a wrong chute and
+    /// is reported as `ParcelMisSorted`). A chute remapped after the scan
+    /// does not make a correctly scanned parcel mis-sorted.
+    pub misread: Vec<bool>,
 }
 
 impl Parcels {

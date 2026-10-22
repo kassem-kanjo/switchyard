@@ -19,7 +19,9 @@ export type RpcMethod =
   | "fault_kinds_json"
   | "inject_fault"
   | "active_faults_json"
-  | "postmortem_markdown";
+  | "postmortem_markdown"
+  /** On demand only: hashing walks the whole history, so snapshots do not carry it. */
+  | "state_hash_hex";
 
 export type WorkerRequest =
   | { type: "init"; preset: string }
@@ -35,7 +37,6 @@ export type WorkerResponse =
       robotXY: Uint16Array;
       robotState: Uint8Array;
       stats: SimStats;
-      hash: string;
       /** `MetricsSeries` JSON, attached every few ticks and after a fault is injected. */
       series?: string;
     }

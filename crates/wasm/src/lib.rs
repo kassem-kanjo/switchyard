@@ -46,6 +46,7 @@ use serde::Serialize;
 use switchyard_core::TICKS_PER_HOUR;
 use switchyard_core::config::ScenarioConfig;
 use switchyard_core::events::Event;
+use switchyard_core::faults::FaultSpec;
 use switchyard_core::grid::Cell;
 use switchyard_core::ids::FaultId;
 use switchyard_core::presets;
@@ -130,6 +131,18 @@ fn to_json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_owned())
 }
 
+/// `sim` with every spec scheduled, plus the first new fault's id; `sim`
+/// itself is untouched, so an error midway leaves nothing behind.
+fn schedule_all(sim: &Sim, specs: Vec<FaultSpec>) -> Result<(Sim, FaultId), String> {
+    let mut next = sim.clone();
+    let mut first = None;
+    for spec in specs {
+        let id = next.schedule_fault(spec).map_err(|e| e.to_string())?;
+        first.get_or_insert(id);
+    }
+    Ok((next, first.ok_or("no fault was scheduled")?))
+}
+
 /// The fault-free run the chart compares against.
 struct Twin {
     sim: Sim,
@@ -161,21 +174,24 @@ pub struct WasmSim {
 }
 
 impl WasmSim {
-    fn from_sim(sim: Sim) -> Self {
+    /// # Errors
+    /// The fault-free twin of a scenario that carries faults could not be
+    /// built. Failing loudly beats a chart that silently lacks its baseline.
+    fn from_sim(sim: Sim) -> Result<Self, String> {
         // A scenario that carries faults gets its twin from tick 0.
-        let twin = (!sim.faults().is_empty())
-            .then(|| {
-                let mut cfg = sim.config().clone();
-                cfg.faults.clear();
-                cfg.disabled_faults.clear();
-                Sim::new(&cfg).ok()
-            })
-            .flatten()
-            .map(|sim| Twin {
-                sim,
+        let twin = if sim.faults().is_empty() {
+            None
+        } else {
+            let mut cfg = sim.config().clone();
+            cfg.faults.clear();
+            cfg.disabled_faults.clear();
+            let twin = Sim::new(&cfg).map_err(|e| format!("building the fault-free twin: {e}"))?;
+            Some(Twin {
+                sim: twin,
                 events: Vec::new(),
                 per_minute: Vec::new(),
-            });
+            })
+        };
         let mut s = Self {
             sim,
             events: Vec::new(),
@@ -187,7 +203,7 @@ impl WasmSim {
             twin,
         };
         s.sim.snapshot(&mut s.snap);
-        s
+        Ok(s)
     }
 
     fn refresh(&mut self) {
@@ -212,19 +228,21 @@ impl WasmSim {
         let req: faultmap::Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
         let now = self.sim.tick();
         let specs = faultmap::to_specs(&req, &self.sim, now)?;
+        // All or nothing: schedule on a copy and adopt it only if every spec
+        // was accepted, so a bad robot in a multi-robot request leaves no
+        // earlier fault live (and creates no twin).
+        let (next, id) = schedule_all(&self.sim, specs)?;
+        // The pre-fault sim becomes the twin: a checkpoint taken just before
+        // the first fault, identical to the main run up to here.
+        let before = std::mem::replace(&mut self.sim, next);
         if self.twin.is_none() {
             self.twin = Some(Twin {
-                sim: self.sim.clone(),
+                sim: before,
                 events: Vec::new(),
                 per_minute: self.per_minute.clone(),
             });
         }
-        let mut first = None;
-        for spec in specs {
-            let id = self.sim.schedule_fault(spec).map_err(|e| e.to_string())?;
-            first.get_or_insert(id);
-        }
-        let id = first.ok_or("no fault was scheduled")?;
+        self.refresh();
         let floor = faultmap::Floor::of(&self.sim);
         let spec = &self.sim.faults()[id.index()];
         Ok(to_json(&faultmap::active_out(id.0, spec, &floor)))
@@ -289,11 +307,12 @@ impl WasmSim {
     /// Build from scenario TOML text.
     ///
     /// # Errors
-    /// A JS error carrying the parse or validation message.
+    /// A JS error carrying the parse or validation message, or the reason the
+    /// fault-free twin of a faulty scenario could not be built.
     #[wasm_bindgen(constructor)]
     pub fn new(scenario_toml: &str) -> Result<WasmSim, JsError> {
         build(scenario_toml)
-            .map(Self::from_sim)
+            .and_then(Self::from_sim)
             .map_err(|e| JsError::new(&e))
     }
 
@@ -464,6 +483,11 @@ mod tests {
     use switchyard_core::faults::FaultKind;
     use switchyard_core::ids::{ChuteId, StationId};
 
+    /// A session over `sim`; the tests' scenarios always have a twin.
+    fn ws(sim: Sim) -> WasmSim {
+        WasmSim::from_sim(sim).unwrap()
+    }
+
     #[test]
     fn version_matches_core() {
         assert_eq!(version(), switchyard_core::VERSION);
@@ -501,7 +525,7 @@ mod tests {
 
     #[test]
     fn preset_builds_and_steps() {
-        let mut w = WasmSim::from_sim(build(preset_toml("small").unwrap()).unwrap());
+        let mut w = ws(build(preset_toml("small").unwrap()).unwrap());
         w.step(50);
         assert_eq!(w.tick(), 50);
         assert_eq!(
@@ -578,7 +602,7 @@ mod tests {
     }
 
     fn small() -> WasmSim {
-        WasmSim::from_sim(build(preset_toml("small").unwrap()).unwrap())
+        ws(build(preset_toml("small").unwrap()).unwrap())
     }
 
     fn parse(s: &str) -> Value {
@@ -645,7 +669,7 @@ mod tests {
     #[test]
     fn a_scenario_with_faults_has_a_twin_from_the_start() {
         let toml = presets::by_name("peak-surge").unwrap();
-        let mut w = WasmSim::from_sim(build(toml).unwrap());
+        let mut w = ws(build(toml).unwrap());
         w.step(240);
         let m = parse(&w.metrics_json());
         assert_eq!(m["twin"].as_array().unwrap().len(), 2);
@@ -788,8 +812,8 @@ mod tests {
 
     #[test]
     fn aisle_block_matches_the_chaos_preset_cells() {
-        let w = WasmSim::from_sim(build(presets::by_name("aisle-7-blocked").unwrap()).unwrap());
-        let mut clean = WasmSim::from_sim(build(presets::MEDIUM_TOML).unwrap());
+        let w = ws(build(presets::by_name("aisle-7-blocked").unwrap()).unwrap());
+        let mut clean = ws(build(presets::MEDIUM_TOML).unwrap());
         clean
             .inject(&request("aisle_block", &json!({"aisle": 7}), 0, 100))
             .unwrap();
@@ -800,6 +824,31 @@ mod tests {
             panic!("not an aisle block");
         };
         assert_eq!(cells, expected);
+    }
+
+    #[test]
+    fn a_failed_multi_robot_request_leaves_no_fault_and_no_twin() {
+        let mut w = small();
+        w.step(100);
+        let n = u32::try_from(w.sim.world().robots.len()).unwrap();
+        let spec = |robot: u32| FaultSpec {
+            at: 100,
+            duration: 300,
+            kind: FaultKind::RobotFailure {
+                robot: switchyard_core::ids::RobotId(robot),
+            },
+        };
+        // Three valid robots, then one that does not exist.
+        let specs = vec![spec(0), spec(1), spec(2), spec(n + 5)];
+        let before = w.sim.faults().len();
+        assert!(schedule_all(&w.sim, specs).is_err());
+        assert_eq!(w.sim.faults().len(), before, "no fault was left live");
+        assert!(w.twin.is_none(), "no twin was created");
+        // The all-valid prefix does schedule, on the copy only.
+        let (next, id) = schedule_all(&w.sim, vec![spec(0), spec(1)]).unwrap();
+        assert_eq!(next.faults().len(), before + 2);
+        assert_eq!(id.index(), before);
+        assert_eq!(w.sim.faults().len(), before);
     }
 
     #[test]

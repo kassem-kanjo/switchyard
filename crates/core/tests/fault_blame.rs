@@ -111,7 +111,7 @@ fn a_failed_robot_holding_a_parcel_reports_its_fault_every_tick() {
 }
 
 #[test]
-fn a_dead_robot_on_a_station_cuts_it_off_and_takes_the_blame() {
+fn a_dead_robot_on_a_station_blocks_it_until_operators_clear_it() {
     let cfg0 = small(4);
     let t0 = 600;
     let r = robot_in(&cfg0, t0, RobotState::Loading);
@@ -125,6 +125,8 @@ fn a_dead_robot_on_a_station_cuts_it_off_and_takes_the_blame() {
         .find(|&s| w.stations.cell[s] == w.robots.pos[r])
         .expect("a loading robot stands on a station");
     let mut cfg = cfg0.clone();
+    cfg.recovery.clear_after_ticks = 300;
+    let cleared_at = t0 + 300;
     cfg.faults.push(fault(
         t0,
         900,
@@ -134,7 +136,7 @@ fn a_dead_robot_on_a_station_cuts_it_off_and_takes_the_blame() {
     ));
     let mut sim = Sim::new(&cfg).unwrap();
     let mut events = Vec::new();
-    let (mut queued_blamed, mut released) = (0, 0);
+    let (mut queued_blamed, mut released, mut cleared, mut resumed) = (0, 0, 0, 0);
     for _ in 0..t0 + 900 {
         events.clear();
         let before: Vec<_> = sim.world().parcels.phase.clone();
@@ -147,12 +149,17 @@ fn a_dead_robot_on_a_station_cuts_it_off_and_takes_the_blame() {
         let d = delays(&events);
         for e in &events {
             match *e {
-                Event::ParcelAssigned { station: s, .. } => {
-                    assert_ne!(
-                        s.index(),
-                        station,
-                        "tick {t}: dispatched to a cut-off station"
-                    );
+                Event::ParcelAssigned { station: s, .. } if s.index() == station => {
+                    assert!(t >= cleared_at, "tick {t}: dispatched to a blocked station");
+                    resumed += 1;
+                }
+                Event::RobotCleared {
+                    tick,
+                    robot,
+                    station: s,
+                } => {
+                    assert_eq!((tick, robot.index(), s.index()), (cleared_at, r, station));
+                    cleared += 1;
                 }
                 Event::ParcelPhase {
                     parcel,
@@ -162,16 +169,34 @@ fn a_dead_robot_on_a_station_cuts_it_off_and_takes_the_blame() {
                 _ => {}
             }
         }
+        // Until cleared, its queue is blamed on the station being blocked
+        // by the failed loader (distinct from the failure's own parcel);
+        // afterwards the station works again and nothing blames the robot
+        // standing nearby for the queue.
         for &p in &w.stations.queue[station] {
             if w.parcels.robot[p.index()].is_none() {
-                let blame = WaitCause::CellBlocked(FaultId(0));
-                assert_eq!(d.get(&p), Some(&(blame, blame)), "tick {t}: {p}");
-                queued_blamed += 1;
+                let blocked = (
+                    WaitCause::StationBusy(StationId(u16::try_from(station).unwrap())),
+                    WaitCause::CellBlocked(FaultId(0)),
+                );
+                if t < cleared_at {
+                    assert_eq!(d.get(&p), Some(&blocked), "tick {t}: {p}");
+                    queued_blamed += 1;
+                } else {
+                    assert_ne!(d.get(&p), Some(&blocked), "tick {t}: {p}");
+                }
             }
+        }
+        // The cleared robot is still failed, off the station, with its parcel.
+        if t >= cleared_at {
+            assert_eq!(w.robots.state[r], RobotState::Failed);
+            assert_ne!(w.robots.pos[r], w.stations.cell[station]);
         }
     }
     assert!(released > 0, "no claim was given back");
-    assert!(queued_blamed > 100, "{queued_blamed}");
+    assert!(queued_blamed > 50, "{queued_blamed}");
+    assert_eq!(cleared, 1);
+    assert!(resumed > 0, "the station never resumed after clearing");
 }
 
 /// Free cells of the small floor's column `x` from row 2 to row 12.
@@ -441,4 +466,84 @@ fn chaos_presets_blame_every_fault_and_the_right_one() {
         }
         eprintln!("{name}: delay by fault {blame:?}, {cut_checked} cut-off waits checked");
     }
+}
+
+#[test]
+fn a_cleared_loader_returns_to_its_station_reloads_and_delivers() {
+    let cfg0 = small(4);
+    let t0 = 600;
+    let r = robot_in(&cfg0, t0, RobotState::Loading);
+    let mut cfg = cfg0.clone();
+    cfg.recovery.clear_after_ticks = 200;
+    cfg.faults.push(fault(
+        t0,
+        500,
+        FaultKind::RobotFailure {
+            robot: RobotId(u32::try_from(r).unwrap()),
+        },
+    ));
+    let mut sim = Sim::new(&cfg).unwrap();
+    let mut events = Vec::new();
+    for _ in 0..t0 {
+        sim.step(&mut events);
+    }
+    let parcel = sim.world().robots.parcel[r].unwrap();
+    let station = sim.world().parcels.station[parcel.index()];
+    let station_cell = sim.world().stations.cell[station.index()];
+    events.clear();
+    let (mut repaired_state, mut reloaded_at_station) = (None, false);
+    while sim.tick() < 4_000 && sim.world().parcels.phase[parcel.index()] != Phase::Dropped {
+        let before = sim.world().robots.state[r];
+        let from = events.len();
+        sim.step(&mut events);
+        let w = sim.world();
+        if before == RobotState::Failed && w.robots.state[r] != RobotState::Failed {
+            // The first state it takes on repair (it may reach the station
+            // and start loading within the same tick).
+            repaired_state = events[from..].iter().find_map(|e| match *e {
+                Event::RobotState { robot, state, .. } if robot.index() == r => Some(state),
+                _ => None,
+            });
+        }
+        if repaired_state.is_some() && w.robots.state[r] == RobotState::Loading {
+            assert_eq!(
+                w.robots.pos[r], station_cell,
+                "loading away from the station"
+            );
+            reloaded_at_station = true;
+        }
+    }
+    assert_eq!(
+        repaired_state,
+        Some(RobotState::ToInduction),
+        "a cleared loader heads back to its station"
+    );
+    assert!(reloaded_at_station);
+    assert_eq!(sim.world().parcels.phase[parcel.index()], Phase::Dropped);
+    // The parcel's phases since the failure keep the lifecycle order.
+    let phases: Vec<Phase> = events
+        .iter()
+        .filter_map(|e| match *e {
+            Event::ParcelPhase {
+                parcel: p, phase, ..
+            } if p == parcel => Some(phase),
+            _ => None,
+        })
+        .collect();
+    let mut prev = Phase::Loading;
+    for &ph in &phases {
+        assert!(
+            matches!(
+                (prev, ph),
+                (Phase::Loading | Phase::Blocked, Phase::Travelling)
+                    | (Phase::Loading | Phase::Travelling, Phase::Blocked)
+                    | (Phase::Travelling | Phase::Blocked, Phase::ChuteWait)
+                    | (Phase::ChuteWait, Phase::Dropped)
+            ),
+            "{prev:?} -> {ph:?} in {phases:?}"
+        );
+        prev = ph;
+    }
+    let s = sim.stats();
+    assert_eq!(s.arrived, s.queued + s.in_flight + s.delivered);
 }

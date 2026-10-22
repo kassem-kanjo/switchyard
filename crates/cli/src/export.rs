@@ -22,7 +22,9 @@ use clap::{Args, ValueEnum};
 use switchyard_core::config::ScenarioConfig;
 use switchyard_core::presets;
 use switchyard_core::sim::Sim;
-use switchyard_trace::export::{OtlpOptions, write_jsonl, write_otlp, write_perfetto};
+use switchyard_trace::export::{
+    OtlpOptions, RunId, run_id, write_jsonl_with_run_id, write_otlp, write_perfetto,
+};
 use switchyard_trace::{ParcelTrace, TraceBuilder};
 
 /// Output format.
@@ -158,15 +160,20 @@ fn scenario_text(arg: &Path) -> Result<String, String> {
     std::fs::read_to_string(arg).map_err(|e| format!("reading {}: {e}", arg.display()))
 }
 
-/// Run the scenario and return every parcel trace, complete and open.
+/// Variant label mixed into the run id of CLI exports.
+const RUN_VARIANT: &str = "cli";
+
+/// Run the scenario and return every parcel trace (complete and open), plus
+/// the run's identity: a hash of the scenario text and the effective seed,
+/// so two seeds never share trace ids.
 ///
 /// # Errors
 /// An unreadable or invalid scenario.
-pub fn collect_traces(
+pub fn collect_run(
     scenario: &Path,
     ticks: u32,
     seed: Option<u64>,
-) -> Result<Vec<ParcelTrace>, String> {
+) -> Result<(Vec<ParcelTrace>, RunId), String> {
     let text = scenario_text(scenario)?;
     let mut config = ScenarioConfig::from_toml_str(&text).map_err(|e| e.to_string())?;
     if let Some(seed) = seed {
@@ -182,7 +189,7 @@ pub fn collect_traces(
     }
     traces.extend(builder.finish(sim.tick()));
     traces.sort_by_key(|t| t.parcel);
-    Ok(traces)
+    Ok((traces, run_id(&text, config.seed, RUN_VARIANT)))
 }
 
 /// Run `switchyard export`.
@@ -190,7 +197,7 @@ pub fn collect_traces(
 /// # Errors
 /// A bad scenario, or a file that cannot be written.
 pub fn run_export(args: ExportArgs) -> Result<(), String> {
-    let traces = collect_traces(&args.scenario, args.ticks, args.seed)?;
+    let (traces, run) = collect_run(&args.scenario, args.ticks, args.seed)?;
     let total = traces.len();
     let traces = args.parcels.apply(traces);
     let file =
@@ -198,8 +205,15 @@ pub fn run_export(args: ExportArgs) -> Result<(), String> {
     let mut w = BufWriter::new(file);
     let res = match args.format {
         ExportFormat::Perfetto => write_perfetto(&mut w, &traces),
-        ExportFormat::Otlp => write_otlp(&mut w, &traces, &OtlpOptions::default()),
-        ExportFormat::Jsonl => write_jsonl(&mut w, &traces),
+        ExportFormat::Otlp => write_otlp(
+            &mut w,
+            &traces,
+            &OtlpOptions {
+                run_id: run,
+                ..OtlpOptions::default()
+            },
+        ),
+        ExportFormat::Jsonl => write_jsonl_with_run_id(&mut w, &traces, run),
     };
     res.and_then(|()| w.flush())
         .map_err(|e| format!("writing {}: {e}", args.out.display()))?;
@@ -222,6 +236,10 @@ pub fn run_export(args: ExportArgs) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn collect_traces(s: &Path, ticks: u32, seed: Option<u64>) -> Result<Vec<ParcelTrace>, String> {
+        collect_run(s, ticks, seed).map(|(t, _)| t)
+    }
 
     #[test]
     fn filters_parse() {
@@ -255,6 +273,37 @@ mod tests {
             picked.iter().map(|t| t.parcel.0).collect::<Vec<_>>(),
             [2, 5]
         );
+    }
+
+    fn otlp_trace_ids(seed: u64) -> Vec<String> {
+        let dir =
+            std::env::temp_dir().join(format!("switchyard-runid-{}-{seed}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("o.json");
+        run_export(ExportArgs {
+            scenario: PathBuf::from("small"),
+            ticks: 400,
+            seed: Some(seed),
+            format: ExportFormat::Otlp,
+            out: out.clone(),
+            parcels: ParcelFilter::All,
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        text.split("\"traceId\":\"")
+            .skip(1)
+            .map(|r| r[..32].to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn trace_ids_depend_on_the_seed() {
+        let a = otlp_trace_ids(1);
+        assert!(!a.is_empty());
+        assert_eq!(a, otlp_trace_ids(1), "same seed, same ids");
+        assert_ne!(a, otlp_trace_ids(2), "different seed, different ids");
+        assert!(a.iter().all(|id| id != &"0".repeat(32)));
     }
 
     #[test]

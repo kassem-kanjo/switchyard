@@ -102,7 +102,11 @@ impl Sim {
             else {
                 continue;
             };
-            if self.distances.get(goal, robots.pos[r]) != UNREACHABLE {
+            // A loader driving back after being cleared off the station
+            // holds a parcel already in `Loading`: it keeps its claim.
+            if self.distances.get(goal, robots.pos[r]) != UNREACHABLE
+                || self.world.parcels.phase[parcel.index()] != Phase::AwaitingRobot
+            {
                 continue;
             }
             self.world.robots.parcel[r] = None;

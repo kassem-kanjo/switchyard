@@ -14,13 +14,15 @@
 //!   the run with that fault disabled from tick 0
 //!   ([`crate::config::ScenarioConfig::without_fault`]): bit-identical state
 //!   hash, since nothing before `at` depended on it;
-//! - disabling an **active** fault ends it now, before the next step, as if
-//!   its window had closed at this tick: the robot is repaired, the chute
-//!   unjammed, the cells reopened, the station resumes, the surge stops, the
-//!   scanner returns to its base rate. A `FaultEnded` event is emitted with
-//!   the current tick. What the fault already did (a backlog, a stuck
-//!   parcel's lost time) stays: the replay is "the fault was fixed at this
-//!   tick", not "it never happened";
+//! - disabling an **active** fault cuts it short: its duration becomes
+//!   `tick - at`, so it ends in phase 1 of the next step (`FaultEnded` at
+//!   the current tick), exactly as in a run whose schedule had that
+//!   truncated duration: bit-identical state hash, and [`Sim::config`]
+//!   records the truncation, so it reproduces the replay. The robot is
+//!   repaired, the chute unjammed, the cells reopened, the station resumes,
+//!   the surge stops, the scanner returns to its base rate. What the fault
+//!   already did (a backlog, a stuck parcel's lost time) stays: the replay is
+//!   "the fault was fixed at this tick", not "it never happened";
 //! - a fault that has already ended (or is already disabled) cannot be
 //!   disabled: replay from an earlier checkpoint instead.
 //!
@@ -30,8 +32,9 @@
 //! anything differed. [`Sim::live_hash`] covers only the state that decides
 //! the future: robots, parcels not yet delivered, queues, chutes, the
 //! sequential random streams, and pending or active faults. Two sims with
-//! equal live hashes at the same tick produce the same future (identical
-//! moves, deliveries and parcel ids), so a replay can stop as soon as its
+//! equal live hashes at the same tick produce the same physical future
+//! (identical moves, deliveries and parcel ids; diagnostic events such as
+//! wait causes may differ), so a replay can stop as soon as its
 //! live hash matches the original's ([`Sim::reconverge_with`],
 //! [`Sim::reconverge_against`]). Exact re-convergence is rare: once robots
 //! have been shuffled, every robot must return to the same cell with the
@@ -49,26 +52,30 @@ use crate::interventions::Intervention;
 use crate::world::RobotState;
 
 impl Sim {
-    /// Switch fault `id` off from now on (see the module docs for pending
-    /// and active faults). Events of the change (`FaultEnded`, a repaired
-    /// robot's `RobotState`, an unjammed chute's `ChuteChanged`) are
-    /// appended to `out` with the current tick.
+    /// Switch fault `id` off from now on (see the module docs): a pending
+    /// fault is disabled (`disabled_faults`); an active one is truncated to
+    /// end at the current tick, and the next [`Sim::step`] ends it and emits
+    /// its events. [`Sim::config`] records either change.
     ///
     /// # Errors
     /// [`ConfigError::BadFault`] if `id` is not in the schedule or has
     /// already ended or been disabled; the sim is unchanged.
-    pub fn disable_fault(&mut self, id: FaultId, out: &mut Vec<Event>) -> Result<(), ConfigError> {
+    pub fn disable_fault(&mut self, id: FaultId) -> Result<(), ConfigError> {
         let i = id.index();
         let status = self.faults.status.get(i).copied();
         match status {
-            Some(Status::Pending) => self.faults.status[i] = Status::Disabled,
-            Some(Status::Active) => {
-                let t = self.tick;
+            Some(Status::Pending) => {
                 self.faults.status[i] = Status::Disabled;
-                out.push(Event::FaultEnded { tick: t, fault: id });
-                self.end_fault(t, i, out);
-                if self.faults.specs[i].kind.changes_topology() {
-                    self.rebuild_topology();
+                self.config = self.config.without_fault(id);
+            }
+            Some(Status::Active) => {
+                // Cut short: the fault's window now closes at this tick, so
+                // the next step ends it exactly as a schedule with the
+                // truncated duration would, and the config records that.
+                let duration = self.tick - self.faults.specs[i].at;
+                self.faults.specs[i].duration = duration;
+                if let Some(spec) = self.config.faults.get_mut(i) {
+                    spec.duration = duration;
                 }
             }
             _ => {
@@ -83,26 +90,21 @@ impl Sim {
                 )));
             }
         }
-        self.config = self.config.without_fault(id);
         Ok(())
     }
 
     /// Apply an intervention from the current tick on (see
-    /// [`crate::interventions`] for each kind's semantics); events of the
-    /// change go to `out`. The sim's [`Sim::config`] records it.
+    /// [`crate::interventions`] for each kind's semantics). The sim's
+    /// [`Sim::config`] records it.
     ///
     /// # Errors
     /// [`ConfigError`] if the intervention is invalid for this floor or this
     /// tick (an unknown chute, station or destination, a zero cap, robots
     /// added in the past, a fault that cannot be disabled); the sim is
     /// unchanged.
-    pub fn apply_intervention(
-        &mut self,
-        intervention: &Intervention,
-        out: &mut Vec<Event>,
-    ) -> Result<(), ConfigError> {
+    pub fn apply_intervention(&mut self, intervention: &Intervention) -> Result<(), ConfigError> {
         if let Intervention::DisableFault(f) = *intervention {
-            return self.disable_fault(f, out);
+            return self.disable_fault(f);
         }
         let updated = self.config.apply(intervention)?;
         match *intervention {
@@ -126,6 +128,7 @@ impl Sim {
                 }
                 self.additions.push(RobotAddition { at, robots });
             }
+            Intervention::ClearAfter { .. } => {}
             Intervention::SetStationCap { station, cap } => {
                 if let Some(s) = station {
                     check_cap(
@@ -145,7 +148,11 @@ impl Sim {
     /// Phase 1, first: robots that join the fleet this tick (scheduled by
     /// `fleet.additions` or [`Intervention::AddRobots`]) appear idle on the
     /// first free parking cells, then the first free floor cells, in
-    /// row-major order.
+    /// row-major order; a cell is free if it is open floor, no robot is on it
+    /// and no active fault closes it. A `RobotsAdded` event reports how many
+    /// were placed (fewer if the floor ran out of cells). Placement depends
+    /// only on the floor's state, so the scenario as written reproduces the
+    /// same outcome.
     pub(super) fn apply_additions(&mut self, t: Tick, out: &mut Vec<Event>) {
         if self.additions.is_empty() {
             return;
@@ -160,11 +167,8 @@ impl Sim {
         if due == 0 {
             return;
         }
+        let mut taken = self.taken_cells();
         let g = &self.layout.grid;
-        let mut taken = vec![false; g.len()];
-        for &p in &self.world.robots.pos {
-            taken[p as usize] = true;
-        }
         let free = self
             .layout
             .parking
@@ -181,6 +185,14 @@ impl Sim {
                 cells.push(c);
             }
         }
+        // u32: at most `due` cells were collected.
+        #[allow(clippy::cast_possible_truncation)]
+        let added = cells.len() as u32;
+        out.push(Event::RobotsAdded {
+            tick: t,
+            requested: due,
+            added,
+        });
         for c in cells {
             let r = self.world.robots.len();
             let robots = &mut self.world.robots;
@@ -233,7 +245,11 @@ pub(super) fn check_cap(c: &StationCap, stations: usize) -> Result<(), ConfigErr
 
 impl Sim {
     /// Hash of the state that decides the future (see the module docs):
-    /// equal live hashes at the same tick mean identical futures. Excludes
+    /// equal live hashes at the same tick mean identical moves, arrivals,
+    /// loads and deliveries from then on. Diagnostic output can still differ
+    /// (wait causes and roots, `Stalled` and `RobotStalled` timing, deadlock
+    /// tracking, mis-sort reports of parcels scanned before), since that
+    /// state is excluded. Also excludes
     /// history (delivered parcels, counters of past events, timestamps that
     /// only label spans), the positions of keyed random streams (keyed draws
     /// do not depend on them), observer state (wait records, watchdog and
@@ -322,6 +338,7 @@ impl Sim {
                 h.write_u64(r as u64);
                 h.write_u32(id.0);
                 h.write_u8(f.pre_fail[r] as u8);
+                h.write_u32(f.failed_since[r]);
             }
         }
         for (c, jam) in f.jammed_by.iter().enumerate() {
@@ -337,6 +354,7 @@ impl Sim {
         for s in &f.surges {
             h.write_u32(s.fault.0);
             h.write_u16(s.station.0);
+            h.write_u32(s.table.per_hour());
             h.write_u32(s.count);
             h.write_u128(s.stream.word_pos());
         }

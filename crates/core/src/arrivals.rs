@@ -21,6 +21,7 @@ use crate::rng::Stream;
 /// sub-stepping needed). The table holds the CDF `P(N <= k)` in Q32.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoissonTable {
+    per_hour: u32,
     cdf: Vec<u64>,
 }
 
@@ -46,7 +47,13 @@ impl PoissonTable {
             acc += pmf;
             cdf.push(u64::try_from(acc).unwrap_or(ONE));
         }
-        Self { cdf }
+        Self { per_hour, cdf }
+    }
+
+    /// The rate the table was built for, per hour.
+    #[must_use]
+    pub const fn per_hour(&self) -> u32 {
+        self.per_hour
     }
 
     /// Count for a uniform draw `u`.

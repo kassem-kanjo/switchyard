@@ -19,7 +19,7 @@
 //!
 //! | Fault | While active | Healthy counterpart |
 //! |---|---|---|
-//! | `robot-failure` | The robot stops where it is (`Failed`) and is an obstacle; its parcel is stuck on it until repair, when it resumes what it was doing | The robot keeps working |
+//! | `robot-failure` | The robot stops where it is (`Failed`) and is an obstacle; its parcel is stuck on it until repair, when it resumes what it was doing. If it stops on a station's induction cell it blocks the station until operators push it aside after `recovery.clear_after_ticks` (default 5 min); it stays failed | The robot keeps working |
 //! | `aisle-block` | No robot may enter the cells; robots inside may leave | The cells stay open |
 //! | `chute-jam` | The chute accepts nothing; a bag swap in progress pauses | Only the normal bag-swap cycle |
 //! | `induction-outage` | The station dispatches no new robots; robots already on their way still load; parcels keep arriving and queue | The station keeps dispatching |
@@ -166,6 +166,11 @@ impl FaultSpec {
     pub fn hash_into(&self, h: &mut Fnv1a) {
         h.write_u32(self.at);
         h.write_u32(self.duration);
+        self.hash_kind(h);
+    }
+
+    /// The kind and its parameters (no timing).
+    fn hash_kind(&self, h: &mut Fnv1a) {
         match &self.kind {
             FaultKind::RobotFailure { robot } => {
                 h.write_u8(0);
@@ -206,16 +211,20 @@ impl FaultSpec {
         }
     }
 
-    /// The 32-bit key of the fault's random streams, from its stable id and
-    /// its content: switching another fault off never changes it (ids are
-    /// stable, [`crate::config::ScenarioConfig::without_fault`]), and two
-    /// identical specs at different ids still get independent streams.
+    /// The 32-bit key of the fault's random streams, from its stable id, its
+    /// start and its kind: switching another fault off never changes it (ids
+    /// are stable, [`crate::config::ScenarioConfig::without_fault`]), two
+    /// identical specs at different ids get independent streams, and the
+    /// duration is left out, so a fault cut short at tick `t`
+    /// ([`crate::sim::Sim::disable_fault`]) draws exactly what the same
+    /// fault truncated to end at `t` in the schedule draws.
     #[must_use]
     pub fn stream_key(&self, id: FaultId) -> u32 {
         let mut h = Fnv1a::new();
-        h.write(b"fault");
+        h.write(b"fault-stream");
         h.write_u32(id.0);
-        self.hash_into(&mut h);
+        h.write_u32(self.at);
+        self.hash_kind(&mut h);
         let x = h.finish();
         // Fold the 64-bit hash to 32 bits.
         #[allow(clippy::cast_possible_truncation)]
@@ -580,5 +589,9 @@ mod tests {
         assert_ne!(a.stream_key(FaultId(2)), b.stream_key(FaultId(3)));
         b.at = 101;
         assert_ne!(a.stream_key(FaultId(2)), b.stream_key(FaultId(2)));
+        // The duration is not part of it (truncation keeps the streams).
+        let mut c = a.clone();
+        c.duration = 7;
+        assert_eq!(a.stream_key(FaultId(2)), c.stream_key(FaultId(2)));
     }
 }

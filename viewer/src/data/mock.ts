@@ -211,6 +211,12 @@ Each cause was replayed with it removed. Shares are of the lost parcels.
 2. The **C12** chute jam explains **19 %** (replay-verified).
 3. The remaining 3 % is noise.
 
+| # | Condition | Shapley (parcels) | Share | Replay |
+|---|:--|--:|--:|:-:|
+| 1 | Dead robot R031 | 412 | **78 %** | R:3 |
+| 2 | Chute jam C12 | 100 | 19 % | R:5 |
+| 3 | Intrinsic congestion | 16 | 3 % | R:1 |
+
 ## What would have helped
 Rerouting aisle 7 would have recovered 88 % of the loss.
 

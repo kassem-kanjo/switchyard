@@ -58,3 +58,19 @@ fmt, clippy `-D warnings`, **186 Rust tests** (2 ignored measurement tests), 45 
 - Incremental distance repair: fault start on large 160 ms → 4.8 ms.
 - 64 one-hour replays on medium: 1.8 s on 16 threads. Exact re-convergence observed 0/8, so replays run to a fixed horizon (ADR 0006).
 - Viewer wired to the real sim: live twin, fault injection, real traces. CI determinism jobs (Linux, Windows, macOS, WASM).
+
+## Re-review (double review) and final fixes (2026-10-21)
+| Gate | Result |
+|---|---|
+| Code: independent Opus reviewer | **With fixes.** 7/8 original findings verified fixed by reproducing them on `b34f4f9` and showing them gone; #8 was fixed in the library but not wired into the CLI. Its own stress test of the incremental distance repair: 10,800 checks, 0 mismatches |
+| Code: `/code-review high` | 7 findings (spawn cells, partial injection, twin errors, store eviction, per-frame hash, Markdown tables, silent AddRobots shortfall) |
+| Tests | 200 Rust + 48 viewer tests; determinism native and WASM match on all reference scenarios |
+
+Fixes landed:
+- **Replays reproducible from their config.** An active-fault disable is recorded as a truncation, and the surge stream key no longer depends on duration. Pinned replay-path hash `053601a2fbdb2cc8`.
+- **The jam gets full blame:** 53k → 90k parcel-ticks.
+- **Failed robots are cleared off induction cells after 5 min** (`[recovery] clear_after_ticks`), per the reviewer's ruling. A repaired loader drives back and reloads. Dead-robot blame falls to a realistic 24k / 22k.
+- AddRobots respects closed cells and reports any shortfall (`RobotsAdded`); remaps don't create false mis-sorts; live-hash soundness test.
+- **The CLI export now uses run ids**; fault injection is all-or-nothing; twin errors are surfaced; the trace store is capped by spans; the per-frame hash is removed; Markdown tables.
+
+**Verdict:** all blocking findings resolved; CP2 passes.

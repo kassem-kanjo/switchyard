@@ -162,16 +162,18 @@ pub enum Event {
     ///   the robot's `RobotWaited` direct and root (a failed robot, a jammed
     ///   chute, a cut-off goal, a chain ending at a dead robot), in any phase
     ///   from `AwaitingRobot` to `ChuteWait`;
-    /// - the parcel's chute is jammed and its robot got no closer to it this
-    ///   tick (it is circling or queueing at the chute; robots waiting at a
-    ///   chute can be pushed aside, so they need not record a wait):
-    ///   `cause: ChuteUnavailable(c)`, `root: Fault(jam)`;
+    /// - the parcel's chute is jammed: every tick of the jam, whatever its
+    ///   robot does (robots waiting at a chute are pushed aside and come
+    ///   back): `cause: ChuteUnavailable(c)`, `root: Fault(jam)`;
     /// - the parcel's robot moved but on a detour: it got closer to its goal
     ///   only on the faulted floor, not by the healthy distances, because a
     ///   fault's closed cells lengthen its route (`CellBlocked(f)`);
     /// - the parcel is `Queued` at a station in an induction outage
-    ///   (`Fault(outage)`), at a station closed cells cut off from the fleet
-    ///   (`CellBlocked(f)`), or behind a volume surge's parcels in the
+    ///   (`Fault(outage)`), at a station whose induction cell a failed robot
+    ///   blocks (`cause: StationBusy(s)`, `root: CellBlocked(failure)`, until
+    ///   operators clear the robot, `recovery.clear_after_ticks`), at a
+    ///   station closed cells cut off from the fleet (`CellBlocked(f)`), or
+    ///   behind a volume surge's parcels in the
     ///   station queue (`Fault(surge)`, which can outlast the surge itself
     ///   while its backlog drains).
     ///
@@ -261,6 +263,30 @@ pub enum Event {
         /// The first tick of the episode on which the cycle was present.
         since: Tick,
     },
+    /// Operators pushed a robot that failed on a station's induction cell to
+    /// a free cell (`recovery.clear_after_ticks` after its failure), so the
+    /// station can work again. The robot stays failed and keeps its parcel.
+    RobotCleared {
+        /// When.
+        tick: Tick,
+        /// The failed robot.
+        robot: RobotId,
+        /// The station it was blocking.
+        station: StationId,
+    },
+    /// Robots joined the fleet (`fleet.additions`): `added` new idle robots
+    /// with the next ids. Fewer than `requested` when the floor had no more
+    /// free cells (open floor, not closed by a fault, not occupied). The
+    /// shortfall is deterministic: a replay of the same scenario reproduces
+    /// it.
+    RobotsAdded {
+        /// When.
+        tick: Tick,
+        /// Robots the addition asked for.
+        requested: u32,
+        /// Robots placed.
+        added: u32,
+    },
     /// A scheduled fault became active. Its effects (a robot entering
     /// `Failed`, a chute `Jammed`) follow in the same tick.
     FaultStarted {
@@ -296,6 +322,8 @@ impl Event {
             | Self::Stalled { tick, .. }
             | Self::RobotStalled { tick, .. }
             | Self::DeadlockDetected { tick, .. }
+            | Self::RobotCleared { tick, .. }
+            | Self::RobotsAdded { tick, .. }
             | Self::FaultStarted { tick, .. }
             | Self::FaultEnded { tick, .. } => tick,
         }

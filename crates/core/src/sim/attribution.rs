@@ -16,7 +16,7 @@
 //! 5. A wait-for cycle that has persisted `planner.deadlock_ticks` ticks is
 //!    reported with `DeadlockDetected`.
 
-use super::{Sim, robot_id};
+use super::{Sim, robot_id, station_id};
 use crate::Tick;
 use crate::events::{Event, WaitCause};
 use crate::faults::SURGE_KEY_FLAG;
@@ -113,11 +113,12 @@ impl Sim {
                 (Some(cause), Some(root)) => root.fault().map(|_| (cause, root)),
                 _ => None,
             };
-            // 2. Its chute is jammed and it got no closer: it is circling the
-            //    chute (PIBT pushes waiting robots aside, so they need not
-            //    record a wait of their own) or held up behind robots that are.
+            // 2. Its chute is jammed: the parcel cannot be delivered until the
+            //    jam clears, whatever its robot does meanwhile (robots waiting
+            //    at a chute are pushed aside and come back, so their motion
+            //    says nothing about the parcel's delay).
             let jammed = match goal {
-                Some(Goal::Chute(c)) if !self.progressed[r] => self.faults.jammed_by[c.index()]
+                Some(Goal::Chute(c)) => self.faults.jammed_by[c.index()]
                     .map(|f| (WaitCause::ChuteUnavailable(c), WaitCause::Fault(f))),
                 _ => None,
             };
@@ -142,33 +143,46 @@ impl Sim {
         }
 
         for s in 0..self.world.stations.cell.len() {
-            let station_cause = self.faults.outage_by[s]
-                .map(WaitCause::Fault)
-                .or(self.faults.station_cut[s].map(WaitCause::CellBlocked));
+            // Outage; a failed robot on the induction cell (StationBusy with
+            // the failure as root: "the station is blocked by a dead
+            // loader", distinct from the failure's own parcel and from
+            // routing cut-offs); or cells that cut the station off.
+            let same = |c: WaitCause| (c, c);
+            let station_delay = self.faults.outage_by[s]
+                .map(|f| same(WaitCause::Fault(f)))
+                .or_else(|| {
+                    self.station_blocker(s).map(|f| {
+                        (
+                            WaitCause::StationBusy(station_id(s)),
+                            WaitCause::CellBlocked(f),
+                        )
+                    })
+                })
+                .or_else(|| self.faults.station_cut[s].map(|f| same(WaitCause::CellBlocked(f))));
             let mut surge_ahead: Option<FaultId> = None;
             for &parcel in &self.world.stations.queue[s] {
                 let p = parcel.index();
                 let key = self.world.parcels.key[p];
                 let surge = key & SURGE_KEY_FLAG != 0;
                 let claimed = self.world.parcels.robot[p].is_some();
-                let cause = if claimed {
+                let delay = if claimed {
                     None
-                } else if station_cause.is_some() {
-                    station_cause
+                } else if station_delay.is_some() {
+                    station_delay
                 } else if surge {
                     None
                 } else {
-                    surge_ahead.map(WaitCause::Fault)
+                    surge_ahead.map(|f| (WaitCause::Fault(f), WaitCause::Fault(f)))
                 };
                 if surge && surge_ahead.is_none() {
                     surge_ahead = self.faults.surge_of(key);
                 }
-                if let Some(cause) = cause {
+                if let Some((cause, root)) = delay {
                     out.push(Event::ParcelDelayed {
                         tick: t,
                         parcel,
                         cause,
-                        root: cause,
+                        root,
                     });
                 }
             }

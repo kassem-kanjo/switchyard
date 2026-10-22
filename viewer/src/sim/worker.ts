@@ -44,6 +44,8 @@ function rpc(s: WasmSimApi, req: Extract<WorkerRequest, { type: "rpc" }>): strin
       return s.active_faults_json(n);
     case "postmortem_markdown":
       return s.postmortem_markdown();
+    case "state_hash_hex":
+      return s.state_hash_hex();
   }
 }
 
@@ -75,7 +77,6 @@ async function handle(req: WorkerRequest): Promise<void> {
         robotXY,
         robotState,
         stats: stats(sim),
-        hash: sim.state_hash_hex(),
         ...(due ? { series: sim.metrics_json() } : {}),
       },
       [robotXY.buffer, robotState.buffer],

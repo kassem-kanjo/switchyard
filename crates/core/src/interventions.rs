@@ -16,6 +16,7 @@
 //! | `RemapDestination` | the destination's chute is replaced after the mapping | parcels scanned from now on go to the new chute; parcels already scanned keep their target | applied at tick 0 |
 //! | `AddRobots { at }` | robots join at the start of tick `at` | the same, if `at >= t` | `at >= t` |
 //! | `SetStationCap` | a station's (or every station's) inbound cap | the cap changes now; robots already inbound keep their claims | applied at tick 0 |
+//! | `ClearAfter` | robots failing on an induction cell are cleared after that many ticks | the same, also for robots already down (cleared at once if overdue) | applied before the first failure starts |
 //!
 //! Rerouting around an aisle is not offered: it is a planner policy, not a
 //! parameter, and the guidance graph already routes around closed cells.
@@ -43,6 +44,13 @@ pub enum Intervention {
         robots: u32,
         /// The tick at whose start they appear.
         at: Tick,
+    },
+    /// Clear robots that fail on an induction cell after `ticks` (see
+    /// [`crate::config::RecoveryConfig`]): "would clearing them sooner
+    /// have helped?".
+    ClearAfter {
+        /// Ticks after the failure.
+        ticks: u32,
     },
     /// Change the inbound cap of one station, or of all (`None`).
     SetStationCap {
@@ -83,6 +91,7 @@ impl ScenarioConfig {
             Intervention::AddRobots { robots, at } => {
                 cfg.fleet.additions.push(RobotAddition { at, robots });
             }
+            Intervention::ClearAfter { ticks } => cfg.recovery.clear_after_ticks = ticks,
             Intervention::SetStationCap { station, cap } => match station {
                 Some(station) => {
                     cfg.fleet.station_caps.retain(|c| c.station != station);
