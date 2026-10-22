@@ -85,7 +85,7 @@ Each fix was applied to the real shift at the time shown and replayed to 00:37.
 
 - **Counterfactual replay.** The shift was re-run with each combination of causes removed, resuming from the last 5-minute checkpoint before the earliest removed cause, and scored at 00:37 as net parcel-minutes of delay against the fault-free twin (same seed, same parcels). Shapley values are exact over all subsets, in integer arithmetic, so the shares add up exactly to the recovered loss.
 - **Noise.** Robot paths diverge after any small change, so every replay ran on 1 history: the real one (no dithered copy diverged: 0 of 3 tried). Values are medians across histories; ± is half their range, widened to at least 5 % of the loss because fewer than 5 histories diverged. Two values that differ by less than twice that band are reported as a tie.
-- **Detection** uses the twin's Poisson noise as the scale. h = 3 is three times the largest CUSUM value seen in 160 simulated hours of fault-free runs whose robot paths were perturbed.
+- **Detection** uses the twin's Poisson noise as the scale. h = 3 is 3.0 times the largest CUSUM value (1.0) seen in 160 simulated hours of fault-free runs whose robot paths were perturbed.
 
 ## Appendix: replay index
 

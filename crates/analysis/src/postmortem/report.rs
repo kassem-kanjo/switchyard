@@ -16,6 +16,12 @@ use super::{PostMortem, describe_kind, significant};
 use crate::metrics::{TICKS_PER_MINUTE, minute_tick};
 use crate::resilience::ticks_to_minutes;
 
+/// Largest CUSUM peak in the fault-free perturbed-path calibration (the
+/// "Calibration of `h`" note in detect.rs; ADR 0006 amendment). The report
+/// quotes `h` as a multiple of it, derived from the live parameter so the
+/// sentence cannot go stale when `h` changes.
+const NULL_PEAK_MAX: f64 = 1.0;
+
 /// `hh:mm` of simulated time.
 fn clock(tick: Tick) -> String {
     let m = tick / TICKS_PER_MINUTE;
@@ -600,10 +606,11 @@ pub fn render(pm_: &PostMortem) -> String {
     );
     let _ = writeln!(
         o,
-        "- **Detection** uses the twin's Poisson noise as the scale. h = {} is three times the \
-         largest CUSUM value seen in 160 simulated hours of fault-free runs whose robot paths \
-         were perturbed.\n",
-        pm_.options.cusum.h
+        "- **Detection** uses the twin's Poisson noise as the scale. h = {} is {:.1} times the \
+         largest CUSUM value ({NULL_PEAK_MAX:.1}) seen in 160 simulated hours of fault-free runs \
+         whose robot paths were perturbed.\n",
+        pm_.options.cusum.h,
+        pm_.options.cusum.h / NULL_PEAK_MAX
     );
 
     // ---- Replay index
