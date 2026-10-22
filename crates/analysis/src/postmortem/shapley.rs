@@ -48,6 +48,55 @@ impl Interplay {
     }
 }
 
+/// Outcome of comparing a noisy value with a threshold.
+///
+/// Hard yes/no thresholds ignore replay noise: a set recovering 89.6 % when
+/// `tau` is 90 % and the band is ±3 % is *within noise*, not a *no*.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// The value clears the threshold even at the bottom of the band.
+    Yes,
+    /// The value misses the threshold even at the top of the band.
+    No,
+    /// The band straddles the threshold: replay noise could go either way.
+    WithinNoise,
+}
+
+impl Verdict {
+    /// Yes if `value - band >= threshold`; No if `value + band < threshold`; else WithinNoise.
+    /// With band 0 this is exactly `value >= threshold` (Yes) / else (No).
+    #[must_use]
+    pub fn of(value: f64, threshold: f64, band: f64) -> Self {
+        if value - band >= threshold {
+            Self::Yes
+        } else if value + band < threshold {
+            Self::No
+        } else {
+            Self::WithinNoise
+        }
+    }
+}
+
+/// Minimal sufficient sets with the noise band applied.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct MinimalSets {
+    /// Smallest masks that are a definite Yes (ties in mask order).
+    pub sure: Vec<usize>,
+    /// Masks of size <= the size of `sure` (or, if `sure` is empty, of the smallest size having any) whose verdict is WithinNoise, in (size, mask) order.
+    pub near: Vec<usize>,
+}
+
+/// Responsibility with the band: smallest contingency size that is definitely pivotal, and smallest that is possibly pivotal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Contingency {
+    /// Fewest other causes that must also be removed before removing `i`
+    /// certainly tips the recovery over the threshold.
+    pub sure: Option<u32>,
+    /// Fewest other causes after which removing `i` *may* tip the recovery
+    /// (its value sits within the noise band); ≤ `sure`.
+    pub possible: Option<u32>,
+}
+
 /// Most causes the lattice supports (2¹⁶ masks); the post-mortem uses ≤ 6.
 pub const MAX_PLAYERS: usize = 16;
 
@@ -198,6 +247,106 @@ impl Attribution {
             .map(|t| t.count_ones())
             .min()
     }
+
+    /// Verdict for "does recovering `x` reach `tau_pct` % of v(N)?" given band (parcel-ticks, same unit as v).
+    ///
+    /// The threshold is `v(N) · tau_pct / 100` in `f64`; with band 0 this
+    /// decides exactly like the integer test in the private `reaches`
+    /// (the product stays exact in `f64` for the magnitudes at hand, and a
+    /// non-integral threshold is at least 0.01 away from any mask value,
+    /// so rounding cannot flip a comparison).
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // threshold is only compared, never accumulated
+    pub fn verdict(&self, x: i64, tau_pct: i64, band: f64) -> Verdict {
+        let threshold = self.total() as f64 * tau_pct as f64 / 100.0;
+        Verdict::of(x as f64, threshold, band)
+    }
+
+    /// Minimal sufficient sets with the noise band applied: `sure` holds the
+    /// smallest masks that *definitely* reach `tau_pct` %, `near` the
+    /// WithinNoise masks that might with less replay noise. Empty (default)
+    /// if `v(N) <= 0`.
+    #[must_use]
+    pub fn minimal_sufficient_within(&self, tau_pct: i64, band: f64) -> MinimalSets {
+        if self.total() <= 0 {
+            return MinimalSets::default();
+        }
+        let verdict = |x: i64| self.verdict(x, tau_pct, band);
+        // Walk the sizes upward, remembering each size's WithinNoise masks
+        // until we know how far "near" may reach. A verdict is never both
+        // Yes and WithinNoise, so `sure` and `near` are disjoint for free.
+        let mut noise_sizes: Vec<Vec<usize>> = Vec::new();
+        for k in 1..=self.n {
+            let (mut yes, mut noise) = (Vec::new(), Vec::new());
+            for s in 1..=self.all() {
+                if s.count_ones() as usize == k {
+                    match verdict(self.v[s]) {
+                        Verdict::Yes => yes.push(s),
+                        Verdict::WithinNoise => noise.push(s),
+                        Verdict::No => {}
+                    }
+                }
+            }
+            if !yes.is_empty() {
+                // First definite Yes: everything WithinNoise at or below this
+                // size might recover enough with less noise.
+                noise_sizes.push(noise);
+                let near = noise_sizes.into_iter().flatten().collect();
+                return MinimalSets { sure: yes, near };
+            }
+            noise_sizes.push(noise);
+        }
+        // Nothing is a definite Yes: near is only the smallest size that
+        // could still reach the threshold inside the band.
+        let near = noise_sizes
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .unwrap_or_default();
+        MinimalSets {
+            sure: Vec::new(),
+            near,
+        }
+    }
+
+    /// Chockler–Halpern responsibility with the noise band: `sure` is the
+    /// smallest contingency after which removing `i` *definitely* tips the
+    /// recovery over `tau_pct` %, `possible` the smallest after which it
+    /// *may* (its value sits inside the band, so noise could tip it either
+    /// way). Fields are `None` when no such contingency exists or
+    /// `v(N) <= 0`.
+    #[must_use]
+    pub fn contingency_within(&self, i: usize, tau_pct: i64, band: f64) -> Contingency {
+        if self.total() <= 0 {
+            return Contingency {
+                sure: None,
+                possible: None,
+            };
+        }
+        let verdict = |x: i64| self.verdict(x, tau_pct, band);
+        let bit = 1 << i;
+        // Sure pivot: without `i` the contingency is a definite No and with
+        // `i` a definite Yes.
+        let sure = (0..=self.all())
+            .filter(|&t| {
+                t & bit == 0
+                    && verdict(self.v[t]) == Verdict::No
+                    && verdict(self.v[t | bit]) == Verdict::Yes
+            })
+            .map(|t| t.count_ones())
+            .min();
+        // Possible pivot: the without-`i` value is not already a Yes and the
+        // with-`i` value is not already a No, i.e. the band straddles the
+        // threshold somewhere in between.
+        let possible = (0..=self.all())
+            .filter(|&t| {
+                t & bit == 0
+                    && verdict(self.v[t]) != Verdict::Yes
+                    && verdict(self.v[t | bit]) != Verdict::No
+            })
+            .map(|t| t.count_ones())
+            .min();
+        Contingency { sure, possible }
+    }
 }
 
 #[cfg(test)]
@@ -287,7 +436,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn verdict_boundaries() {
+        // Band 2 around a threshold of 10: the Yes edge is inclusive
+        // (12 - 2 = 10 counts), the No edge is exclusive
+        // (8 + 2 = 10 is still straddling the threshold).
+        assert_eq!(Verdict::of(12.0, 10.0, 2.0), Verdict::Yes);
+        assert_eq!(Verdict::of(11.9, 10.0, 2.0), Verdict::WithinNoise);
+        assert_eq!(Verdict::of(8.0, 10.0, 2.0), Verdict::WithinNoise);
+        assert_eq!(Verdict::of(7.9, 10.0, 2.0), Verdict::No);
+        // Band 0 degenerates to the hard comparison.
+        assert_eq!(Verdict::of(10.0, 10.0, 0.0), Verdict::Yes);
+        assert_eq!(Verdict::of(9.99, 10.0, 0.0), Verdict::No);
+    }
+
+    #[test]
+    fn zero_band_matches_the_hard_thresholds() {
+        let a = Attribution::new(&[0, 80, 80, 100]);
+        assert_eq!(
+            a.minimal_sufficient_within(90, 0.0),
+            MinimalSets {
+                sure: vec![3],
+                near: vec![],
+            }
+        );
+        assert_eq!(a.minimal_sufficient_within(80, 0.0).sure, vec![1, 2]);
+        assert_eq!(
+            a.contingency_within(0, 90, 0.0),
+            Contingency {
+                sure: Some(1),
+                possible: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn near_miss_sets_are_listed() {
+        // 88 of 100 with band 3: 88 + 3 = 91 >= 90 so WithinNoise, and
+        // 88 - 3 = 85 < 90 so it is not a Yes; removal of both is.
+        let a = Attribution::new(&[0, 88, 60, 100]);
+        assert_eq!(
+            a.minimal_sufficient_within(90, 3.0),
+            MinimalSets {
+                sure: vec![3],
+                near: vec![1],
+            }
+        );
+    }
+
+    #[test]
+    fn contingency_flags_noise() {
+        // Game [0, 88, 60, 100], tau 90, band 3, cause 0 (bit 1). Hand
+        // derivation over the contingencies t without bit 0:
+        // - t = ∅: v[∅] = 0 → No; v[{0}] = 88 → WithinNoise (88 + 3 ≥ 90).
+        //   Not a sure pivot (need Yes on top), but a possible one.
+        // - t = {1}: v[{1}] = 60 → No; v[{0,1}] = 100 → Yes. A sure pivot.
+        // Hence sure = Some(1) (t = {1}) yet possible = Some(0) (t = ∅):
+        // the band says removing cause 0 *may* already tip the recovery.
+        let a = Attribution::new(&[0, 88, 60, 100]);
+        assert_eq!(
+            a.contingency_within(0, 90, 3.0),
+            Contingency {
+                sure: Some(1),
+                possible: Some(0),
+            }
+        );
+    }
+
     proptest! {
+        #[test]
+        fn within_with_zero_band_equals_hard(v in game()) {
+            let a = Attribution::new(&v);
+            for tau in [50, 90] {
+                let within = a.minimal_sufficient_within(tau, 0.0);
+                prop_assert_eq!(within.sure, a.minimal_sufficient(tau));
+                prop_assert!(within.near.is_empty());
+            }
+        }
+
         #[test]
         fn shapley_is_efficient_and_matches_the_classical_formula(v in game()) {
             let a = Attribution::new(&v);
