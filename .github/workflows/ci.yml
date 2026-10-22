@@ -110,7 +110,7 @@ jobs:
       - run: cargo build --release -p switchyard-cli
       - name: Compare state hashes with expected.txt
         shell: bash
-        run: scripts/determinism/check.sh
+        run: bash scripts/determinism/check.sh
 
   determinism-wasm:
     name: determinism (wasm, node)
