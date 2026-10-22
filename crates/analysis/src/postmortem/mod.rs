@@ -133,6 +133,25 @@ fn incident_loss(twin: &[u32], actual: &[u32], inc: &Incident) -> i64 {
         .sum()
 }
 
+/// Robots to try as dither copies, in order: `extra` evenly spread moving
+/// robots first, then the rest of `moving`, at most `extra · DITHER_TRIES`.
+/// Each robot appears once: with fewer moving robots than wanted copies the
+/// spread picks would repeat, and pausing the same robot twice gives the same
+/// history twice (#14).
+fn dither_pool(moving: &[RobotId], extra: usize) -> Vec<RobotId> {
+    let spread = (1..=extra).filter_map(|d| moving.get(d * moving.len() / (extra + 1)));
+    let mut pool: Vec<RobotId> = Vec::new();
+    for &r in spread.chain(moving) {
+        if pool.len() == extra * DITHER_TRIES {
+            break;
+        }
+        if !pool.contains(&r) {
+            pool.push(r);
+        }
+    }
+    pool
+}
+
 /// Index of the incident that lost most deliveries; the earliest wins a tie
 /// (`max_by_key` keeps the last maximum, hence the reversed index).
 fn largest_incident(twin: &[u32], actual: &[u32], incidents: &[Incident]) -> Option<usize> {
@@ -599,16 +618,7 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
         sim.live_hash()
     };
     let extra = options.dither.max(1) - 1;
-    // Evenly spread picks first, then the remaining moving robots in order.
-    let spread: Vec<RobotId> = (1..=extra)
-        .filter_map(|d| moving.get(d * moving.len() / (extra + 1)).copied())
-        .collect();
-    let pool: Vec<RobotId> = spread
-        .iter()
-        .copied()
-        .chain(moving.iter().copied().filter(|r| !spread.contains(r)))
-        .take(extra * DITHER_TRIES)
-        .collect();
+    let pool = dither_pool(&moving, extra);
     let mut dither: Vec<RobotId> = Vec::new();
     let mut dithered: Vec<History> = Vec::new();
     let mut history_hashes = vec![real_end];
@@ -629,7 +639,9 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
             })
             .collect::<Result<_, _>>()?;
         for (robot, h, end) in tried {
-            if end != real_end {
+            // A copy identical to one already kept (two pauses that lead to
+            // the same world) is not an independent sample either.
+            if !history_hashes.contains(&end) {
                 dither.push(robot);
                 dithered.push(h);
                 history_hashes.push(end);
@@ -754,7 +766,26 @@ pub fn describe_kind(kind: &FaultKind) -> String {
 #[cfg(test)]
 mod tests {
     use super::detect::{CusumParams, detect_all};
-    use super::largest_incident;
+    use super::{DITHER_TRIES, dither_pool, largest_incident};
+    use switchyard_core::ids::RobotId;
+
+    #[test]
+    fn the_dither_pool_never_repeats_a_robot() {
+        let moving: Vec<RobotId> = (0..4).map(RobotId).collect();
+        // More copies wanted than moving robots: each robot once.
+        let pool = dither_pool(&moving, 7);
+        assert_eq!(pool.len(), 4);
+        let mut sorted = pool.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), pool.len(), "{pool:?}");
+        // Spread picks first, capped at extra * DITHER_TRIES.
+        let moving: Vec<RobotId> = (0..20).map(RobotId).collect();
+        let pool = dither_pool(&moving, 2);
+        assert_eq!(pool.len(), 2 * DITHER_TRIES);
+        assert_eq!(&pool[..2], &[RobotId(6), RobotId(13)]);
+        assert!(dither_pool(&moving, 0).is_empty());
+    }
 
     #[test]
     fn the_largest_incident_is_analysed_and_a_tie_goes_to_the_earliest() {

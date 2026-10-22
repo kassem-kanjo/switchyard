@@ -92,6 +92,17 @@ fn dither_counts_only_copies_that_diverge() {
         "{:?}",
         pm.history_hashes
     );
+    // Pairwise distinct too: two copies ending in the same world are one
+    // sample, not two.
+    let mut hashes = pm.history_hashes.clone();
+    hashes.sort_unstable();
+    hashes.dedup();
+    assert_eq!(
+        hashes.len(),
+        pm.history_hashes.len(),
+        "{:?}",
+        pm.history_hashes
+    );
     assert!(pm.dither_tried >= pm.dither.len());
     assert!(
         md.contains(&format!("(of {} tried)", pm.dither_tried)),
@@ -103,4 +114,39 @@ fn dither_counts_only_copies_that_diverge() {
     #[allow(clippy::cast_precision_loss)]
     let floor = 0.05 * pm.loss() as f64;
     assert!(pm.loss_band() >= floor - 1e-9);
+}
+
+/// #14 (review): on the small floor fewer robots are moving at the onset
+/// than copies are wanted, and some pauses end in the same world. Before the
+/// fix the same robot was dithered twice and equal copies were counted as
+/// independent histories, narrowing the band.
+#[test]
+fn dither_copies_are_distinct_robots_and_distinct_worlds() {
+    let mut c = ScenarioConfig::from_toml_str(presets::SMALL_TOML).unwrap();
+    let busy = chute_of_dest(&c, 0);
+    c.faults = vec![
+        f(1_200, 1_800, FaultKind::ChuteJam { chute: busy }),
+        f(
+            1_320,
+            600,
+            FaultKind::RobotFailure {
+                robot: switchyard_core::ids::RobotId(7),
+            },
+        ),
+    ];
+    let (pm, md) = run(&c, 6_000, 20);
+    assert!(pm.histories() > 1, "{md}");
+    let mut robots = pm.dither.clone();
+    robots.sort_unstable();
+    robots.dedup();
+    assert_eq!(robots.len(), pm.dither.len(), "{:?}", pm.dither);
+    let mut hashes = pm.history_hashes.clone();
+    hashes.sort_unstable();
+    hashes.dedup();
+    assert_eq!(
+        hashes.len(),
+        pm.history_hashes.len(),
+        "{:?}",
+        pm.history_hashes
+    );
 }
