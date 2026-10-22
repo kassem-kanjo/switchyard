@@ -1,6 +1,6 @@
 # Switchyard: status
 
-**Updated:** 2026-10-22 · **Phase:** CP3 built → CP3 gates → V1 release
+**Updated:** 2026-10-22 (02:35) · **Phase:** CP3 built → CP3 gates → V1 release
 
 ## Now
 - `v0.1.0`; CP1 merged (#3). **CP2** PR #4: all review findings fixed; CI green except one Windows test job pending, so merge when green.
@@ -12,7 +12,8 @@
 3. #9 README numbers and GIF · #10 demo video · #11 `/security-review` · #12 tag `v1.0.0` and CEO review.
 
 ## Blockers
-- None. Easy tasks (#9 numbers, tests, docs) can go to cheap OpenCode workers (`opencode-delegation`).
+- **OpenCode Go 5-hour quota hit** (2026-10-22 ~02:20; resets ~06:42 EDT). Four workers on #14-#17 stopped after ~6 min with no usable output (only #15 left partial, untested edits in its worktree). Re-dispatch the same briefs after the reset, **one or two at a time**, not four.
+- Parallel cargo builds under the Temp scratchpad hit `LNK1104` (file locked, likely antivirus on fresh build-script .exe). Put worker worktrees outside `%TEMP%` or share one `CARGO_TARGET_DIR` per worker run sequentially.
 
 ## Key findings
 - Most fault damage spreads as congestion; replay attribution captures it.
