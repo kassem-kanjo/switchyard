@@ -90,6 +90,44 @@ impl RunSummary {
     }
 }
 
+/// Track robot failures from one tick's events (appended by
+/// [`Sim::step`]): a failure opens a record at the robot's cell; operators
+/// clearing it off an induction cell (`RobotCleared`) closes that record
+/// and opens one at the cell it was pushed to; repair closes it. Open
+/// records have `to == Tick::MAX`.
+pub fn record_failures(failures: &mut Vec<FailedRobot>, events: &[Event], sim: &Sim) {
+    for e in events {
+        // (tick, robot, failed after this event, moved by operators)
+        let (tick, robot, failed, cleared) = match *e {
+            Event::RobotState { tick, robot, state } => {
+                (tick, robot, state == RobotState::Failed, false)
+            }
+            Event::RobotCleared { tick, robot, .. } => (tick, robot, true, true),
+            _ => continue,
+        };
+        let current = failures
+            .iter_mut()
+            .rev()
+            .find(|f| f.robot == robot && f.to == Tick::MAX);
+        match current {
+            Some(f) if !failed || cleared => f.to = tick,
+            // Already recorded where it stands.
+            Some(_) => continue,
+            None => {}
+        }
+        if failed {
+            failures.push(FailedRobot {
+                robot,
+                // A failed robot does not move until cleared: its cell
+                // after the step is where it stands.
+                cell: sim.world().robots.pos[robot.index()],
+                from: tick,
+                to: Tick::MAX,
+            });
+        }
+    }
+}
+
 /// Run `cfg` for `ticks` ticks and summarise it.
 ///
 /// # Errors
@@ -103,26 +141,7 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick) -> Result<RunSummary, ConfigError>
         events.clear();
         sim.step(&mut events);
         recorder.record_tick(&events);
-        for e in &events {
-            if let Event::RobotState { tick, robot, state } = *e {
-                let open = failures
-                    .iter_mut()
-                    .rev()
-                    .find(|f| f.robot == robot && f.to == Tick::MAX);
-                match (state, open) {
-                    (RobotState::Failed, None) => failures.push(FailedRobot {
-                        robot,
-                        // A failed robot does not move: its cell after the
-                        // step is the cell it failed on.
-                        cell: sim.world().robots.pos[robot.index()],
-                        from: tick,
-                        to: Tick::MAX,
-                    }),
-                    (RobotState::Failed, Some(_)) | (_, None) => {}
-                    (_, Some(f)) => f.to = tick,
-                }
-            }
-        }
+        record_failures(&mut failures, &events, &sim);
     }
     for f in &mut failures {
         f.to = f.to.min(ticks);
@@ -618,6 +637,20 @@ mod tests {
         let loss = capacity_loss(l, 200, &faults, &f.failures, 3_600, 3_700);
         assert!((loss.retained - 0.75).abs() < 1e-12, "{loss:?}");
         assert_eq!(loss.stations_lost, 2);
+
+        // Operators push them off the loading cells after
+        // `recovery.clear_after_ticks` (600): the stations work again.
+        let after = cfg.recovery.clear_after_ticks;
+        let f = run(&cfg, 3_600 + after + 100).unwrap();
+        let on_station = |x: &FailedRobot| l.stations.contains(&x.cell);
+        assert_eq!(f.failures.len(), 4, "{:?}", f.failures);
+        assert!(
+            f.failures
+                .iter()
+                .all(|x| on_station(x) == (x.to == 3_600 + after))
+        );
+        let loss = capacity_loss(l, 200, &faults, &f.failures, 3_600 + after, 3_700 + after);
+        assert_eq!(loss.stations_lost, 0, "{loss:?}");
     }
 
     #[test]

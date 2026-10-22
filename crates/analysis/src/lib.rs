@@ -12,6 +12,7 @@
 pub use switchyard_trace as trace;
 
 pub mod metrics;
+pub mod postmortem;
 pub mod resilience;
 pub mod twin;
 
