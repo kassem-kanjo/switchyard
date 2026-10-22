@@ -1,5 +1,6 @@
 ---
 source: crates/analysis/src/postmortem/report.rs
+assertion_line: 678
 expression: render(&pm)
 ---
 # Post-mortem: small-jam (seed 1)
@@ -33,7 +34,7 @@ Each cause was removed in every combination and the shift replayed (exact Shaple
 | 1 | chute C0 jams (F0) | 827 ± 0 | 99 % | 832 | 822 | 1 | [R1, R2] |
 | 2 | robot R7 breaks down (F1) | 10 ± 0 | 1 % | 15 | 5 | 0 | [R2, R1] |
 
-Interaction: chute C0 jams (F0) and robot R7 breaks down (F1) overlap (removing either one recovers much of the same loss), -10 parcel-min [R1, R2, R3].
+Interaction: chute C0 jams (F0) and robot R7 breaks down (F1) compound (together they did more damage than each did alone), -10 parcel-min [R1, R2, R3].
 
 Smallest set of causes whose removal recovers at least 90 % of the recoverable loss: {F0} [R1].
 

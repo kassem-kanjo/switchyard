@@ -12,13 +12,41 @@
 //!   equally among its members), equal to the classical
 //!   `Σ_S |S|!(n-|S|-1)!/n! · (v(S∪i) - v(S))`.
 //! - **Pair interaction** (Grabisch–Roubens) `I_ij = Σ_{T⊇{i,j}} m(T) /
-//!   (|T|-1)`: > 0 complements (together recover more than apart), < 0
-//!   substitutes (overdetermination).
+//!   (|T|-1)`. In this *recovery* game, `I_ij > 0` means removing both
+//!   recovers more than the two removals apart: the causes are
+//!   **redundant** (overdetermination: either one alone does most of the
+//!   damage, so removing just one helps little). `I_ij < 0` means removing
+//!   either one recovers much of the same loss: the causes **compound**
+//!   (together they did more damage than the sum of each alone).
+//!   [`Interplay::of`] names the sign.
 //!
 //! Everything is held as integers scaled by `n!` (`i128`), so efficiency
 //! (`Σ φᵢ = v(N) - v(∅)`) holds *exactly*; division happens only when a
 //! value is rendered. Values may be negative (removing a cause can make
 //! things worse); nothing here assumes monotonicity.
+
+/// What the sign of a pair interaction means (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interplay {
+    /// `I_ij > 0`: either cause alone does most of the damage.
+    Redundant,
+    /// `I_ij < 0`: together they did more damage than apart.
+    Compound,
+}
+
+impl Interplay {
+    /// The interplay of an interaction value (`None` for 0).
+    #[must_use]
+    pub fn of(interaction: f64) -> Option<Self> {
+        if interaction > 0.0 {
+            Some(Self::Redundant)
+        } else if interaction < 0.0 {
+            Some(Self::Compound)
+        } else {
+            None
+        }
+    }
+}
 
 /// Most causes the lattice supports (2¹⁶ masks); the post-mortem uses ≤ 6.
 pub const MAX_PLAYERS: usize = 16;
@@ -201,18 +229,40 @@ mod tests {
     }
 
     #[test]
-    fn two_substitutes_split_the_credit_and_interact_negatively() {
-        // Either cause alone recovers 80; both 100 (overdetermination).
+    fn compounding_causes_split_the_credit_and_interact_negatively() {
+        // Removing either cause alone recovers 80 of 100: alone, each would
+        // have done only 20, together 100. They compound.
         let a = Attribution::new(&[0, 80, 80, 100]);
         assert_eq!(a.shapley_scaled, vec![100, 100]); // 50 each, n! = 2
         assert!((a.shapley(0) - 50.0).abs() < 1e-12);
         assert_eq!(a.dividends, vec![0, 80, 80, -60]);
         assert!((a.interaction(0, 1) + 60.0).abs() < 1e-12);
+        assert_eq!(
+            Interplay::of(a.interaction(0, 1)),
+            Some(Interplay::Compound)
+        );
         assert_eq!((a.alone(0), a.leave_one_out(0)), (80, 20));
         assert_eq!(a.minimal_sufficient(90), vec![3]);
         assert_eq!(a.minimal_sufficient(80), vec![1, 2]);
         // Pivotal only once the other is gone: responsibility 1/2.
         assert_eq!(a.contingency(0, 90), Some(1));
+    }
+
+    #[test]
+    fn overdetermined_causes_are_redundant() {
+        // Two identical jams of one chute: removing either alone recovers
+        // nothing (the other still jams it); removing both recovers all.
+        let l = 1_000;
+        let a = Attribution::new(&[0, 0, 0, l]);
+        assert_eq!(a.shapley_scaled, vec![l.into(), l.into()]); // L/2 each, n! = 2
+        assert!((a.interaction(0, 1) - 1_000.0).abs() < 1e-12);
+        assert_eq!(
+            Interplay::of(a.interaction(0, 1)),
+            Some(Interplay::Redundant)
+        );
+        // Each is pivotal only once the other is gone: responsibility 1/2.
+        assert_eq!(a.contingency(0, 90), Some(1));
+        assert_eq!(Interplay::of(0.0), None);
     }
 
     #[test]

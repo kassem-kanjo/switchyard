@@ -11,6 +11,7 @@ use switchyard_core::Tick;
 use switchyard_core::interventions::Intervention;
 
 use super::candidates::{MAX_CANDIDATES, minutes};
+use super::shapley::Interplay;
 use super::{PostMortem, describe_kind, significant};
 use crate::metrics::{TICKS_PER_MINUTE, minute_tick};
 use crate::resilience::ticks_to_minutes;
@@ -306,11 +307,7 @@ pub fn render(pm_: &PostMortem) -> String {
             );
         }
         for (i, j, x) in pairs.into_iter().take(3) {
-            let kind = if x < 0.0 {
-                "overlap (removing either one recovers much of the same loss)"
-            } else {
-                "compound (together they do more damage than apart)"
-            };
+            let kind = interplay_text(Interplay::of(x));
             let _ = writeln!(
                 o,
                 "Interaction: {} and {} {kind}, {} parcel-min [{}, {}, {}].",
@@ -602,6 +599,17 @@ fn fix_change(ivs: &[Intervention]) -> String {
     }
 }
 
+/// Plain words for an interaction's sign (see [`Interplay`]).
+const fn interplay_text(kind: Option<Interplay>) -> &'static str {
+    match kind {
+        Some(Interplay::Redundant) => {
+            "are redundant (either one alone causes most of this loss, so removing just one              recovers little)"
+        }
+        Some(Interplay::Compound) => "compound (together they did more damage than each did alone)",
+        None => "are independent",
+    }
+}
+
 /// `one` or `many` by count.
 const fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
     if n == 1 { one } else { many }
@@ -682,6 +690,17 @@ mod tests {
         .unwrap();
         assert!(pm.incident.is_none());
         assert!(render(&pm).contains("no incident"));
+    }
+
+    #[test]
+    fn interaction_wording_follows_the_sign_of_the_recovery_game() {
+        use crate::postmortem::shapley::Attribution;
+        // Overdetermination: [0, 0, 0, L] -> I > 0 -> redundant.
+        let a = Attribution::new(&[0, 0, 0, 600]);
+        assert!(interplay_text(Interplay::of(a.interaction(0, 1))).contains("redundant"));
+        // Compounding: either removal recovers most -> I < 0 -> compound.
+        let b = Attribution::new(&[0, 500, 500, 600]);
+        assert!(interplay_text(Interplay::of(b.interaction(0, 1))).contains("compound"));
     }
 
     #[test]
