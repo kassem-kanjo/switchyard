@@ -9,7 +9,7 @@ expression: render(&pm)
 ## Summary
 
 From 00:11 sorted throughput fell up to 62 % below the fault-free twin. By 00:37 the incident had cost **837 parcel-minutes** of delay, and 23 parcels were more than 10 min late [R0].
-Chute C0 jams (F0) explains 99 % (827 parcel-min) [R1]; robot R7 breaks down (F1) explains 1 % (10 parcel-min) [R2]. 0 parcel-min (0 %) is not explained by removing these causes [R3].
+Chute C0 jams (F0) explains 99 % ± 5 % (827 parcel-min) [R0–R3]. 0 parcel-min (0 %) is not explained by removing these causes [R3].
 
 Best fix: **send chute C0's destination to C1 while it is jammed** would have recovered 595 parcel-min (71 % of the loss) [X2].
 
@@ -30,12 +30,15 @@ Each cause was removed in every combination and the shift replayed (exact Shaple
 
 | # | Condition | Shapley (parcel-min) | Share | Alone | Last | Responsibility | Replays |
 |---|---|---|---|---|---|---|---|
-| 1 | chute C0 jams (F0) | 827 ± 42 | 99 % | 832 | 822 | 1 | [R1, R2] |
-| 2 | robot R7 breaks down (F1) | 10 ± 42 | 1 % | 15 | 5 | 0 | [R2, R1] |
+| 1 | chute C0 jams (F0) | 827 ± 42 | 99 % ± 5 % | 832 | 822 | 1 | [R1, R2] |
+
+Shapley values and shares are computed from every replay [R0–R3]; *Alone* and *Last* come from the two replays in the last column.
+
+Within noise (share no larger than its band, so not ranked): robot R7 breaks down (F1) (10 ± 42 parcel-min).
 
 Interactions: none beyond the noise; the causes add up independently.
 
-Smallest set of causes whose removal recovers at least 90 % of the recoverable loss: {F0} [R1].
+Smallest set of causes whose removal recovers at least 90 % of the recoverable loss (judged against the ± 42 parcel-min noise): {F0} [R1].
 
 ## Trigger and detection
 
@@ -61,7 +64,7 @@ Each fix was applied to the real shift at the time shown and replayed to 00:37.
 
 | Action | Type | Expected effect | Owner | Source |
 |---|---|---|---|---|
-| Reduce the frequency or duration of: chute C0 jams | prevent | up to 827 parcel-min | site ops | [R1] |
+| Reduce the frequency or duration of: chute C0 jams | prevent | up to 832 ± 42 parcel-min | site ops | [R1] |
 | Send chute C0's destination to C1 while it is jammed | mitigate | 595 ± 42 parcel-min | site ops | [X2] |
 | Release 2 spare robots at the first fault | mitigate | 143 ± 42 parcel-min | site ops | [X3] |
 

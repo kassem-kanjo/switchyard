@@ -82,13 +82,22 @@ pub fn render(pm_: &PostMortem) -> String {
     let all = att.all();
     let floor = (loss / 20).max(10 * i64::from(TICKS_PER_MINUTE));
     let attributable = total > floor;
-    let share = |x: f64| {
+    // A share is always printed with its noise band (#16): a bare percentage
+    // reads as more certain than the replays can support.
+    let share = |x: f64, band: f64| {
         if attributable {
-            format!("{:.0} %", 100.0 * x / total as f64)
+            format!(
+                "{:.0} % ± {:.0} %",
+                100.0 * x / total as f64,
+                100.0 * band / total as f64
+            )
         } else {
             "-".to_owned()
         }
     };
+    // Shapley values use every replay of the lattice, so they cite the whole
+    // range, not just the single-removal replay R(1<<i) (#16).
+    let lattice = format!("R0–R{all}");
     let n_replays = pm_.replays.len() * histories;
     let _ = writeln!(
         o,
@@ -109,6 +118,12 @@ pub fn render(pm_: &PostMortem) -> String {
             .cmp(&att.shapley_scaled[a])
             .then(a.cmp(&b))
     });
+    // Causes whose share is within one noise band of zero are not ranked:
+    // their order would be an artefact of the dither (#16). They are listed
+    // once, below the table.
+    let (order, in_noise): (Vec<usize>, Vec<usize>) = order
+        .into_iter()
+        .partition(|&i| att.shapley(i).abs() > pm_.share_band(i));
     let label = |i: usize| {
         let c = &pm_.candidates[i];
         format!("{} ({})", describe_kind(&c.spec.kind), c.fault)
@@ -150,11 +165,10 @@ pub fn render(pm_: &PostMortem) -> String {
             .take(3)
             .map(|&i| {
                 format!(
-                    "{} explains {} ({} parcel-min) [{}]",
+                    "{} explains {} ({} parcel-min) [{lattice}]",
                     label(i),
-                    share(att.shapley(i)),
+                    share(att.shapley(i), pm_.share_band(i)),
                     pminf(att.shapley(i)),
-                    r(1 << i)
                 )
             })
             .collect();
@@ -255,16 +269,12 @@ pub fn render(pm_: &PostMortem) -> String {
                 let prev = order[rank - 1];
                 !significant(att.shapley(prev) - phi, band_i.max(pm_.share_band(prev)))
             };
-            let resp = att.contingency(i, pm_.options.tau_pct).map_or_else(
-                || "0".to_owned(),
-                |k| {
-                    if k == 0 {
-                        "1".to_owned()
-                    } else {
-                        format!("1/{}", k + 1)
-                    }
-                },
-            );
+            let c = att.contingency_within(i, pm_.options.tau_pct, loss_band);
+            let resp = if c.sure == c.possible {
+                resp_text(c.sure)
+            } else {
+                format!("{} (possibly {})", resp_text(c.sure), resp_text(c.possible))
+            };
             let _ = writeln!(
                 o,
                 "| {} | {}{} | {} ± {} | {} | {} | {} | {} | [{}, {}] |",
@@ -277,7 +287,7 @@ pub fn render(pm_: &PostMortem) -> String {
                 },
                 pminf(phi),
                 pminf(band_i),
-                share(phi),
+                share(phi, band_i),
                 pmin(att.alone(i)),
                 pmin(att.leave_one_out(i)),
                 resp,
@@ -291,6 +301,28 @@ pub fn render(pm_: &PostMortem) -> String {
                      back another cause's damage |  |  |  |  |  |  |"
                 );
             }
+        }
+        let _ = writeln!(
+            o,
+            "\nShapley values and shares are computed from every replay [{lattice}]; *Alone* and *Last* come from the two replays in the last column."
+        );
+        if !in_noise.is_empty() {
+            let names: Vec<String> = in_noise
+                .iter()
+                .map(|&i| {
+                    format!(
+                        "{} ({} ± {} parcel-min)",
+                        label(i),
+                        pminf(att.shapley(i)),
+                        pminf(pm_.share_band(i))
+                    )
+                })
+                .collect();
+            let _ = writeln!(
+                o,
+                "\nWithin noise (share no larger than its band, so not ranked): {}.",
+                names.join("; ")
+            );
         }
         // Interactions beyond the noise.
         let noise = (0..n).map(|i| pm_.share_band(i)).fold(0.0, f64::max);
@@ -320,9 +352,9 @@ pub fn render(pm_: &PostMortem) -> String {
                 r((1 << i) | (1 << j))
             );
         }
-        let sets = att.minimal_sufficient(pm_.options.tau_pct);
-        if !sets.is_empty() {
-            let names: Vec<String> = sets
+        let sets = att.minimal_sufficient_within(pm_.options.tau_pct, loss_band);
+        let set_names = |masks: &[usize]| -> String {
+            masks
                 .iter()
                 .map(|&m| {
                     let parts: Vec<String> = (0..n)
@@ -331,13 +363,25 @@ pub fn render(pm_: &PostMortem) -> String {
                         .collect();
                     format!("{{{}}} [{}]", parts.join(", "), r(m))
                 })
-                .collect();
+                .collect::<Vec<_>>()
+                .join(" or ")
+        };
+        if !sets.sure.is_empty() {
             let _ = writeln!(
                 o,
-                "\nSmallest set of causes whose removal recovers at least {} % of the recoverable \
-                 loss: {}.",
+                "\nSmallest set of causes whose removal recovers at least {} % of the recoverable loss (judged against the ± {} parcel-min noise): {}.",
                 pm_.options.tau_pct,
-                names.join(" or ")
+                pminf(loss_band),
+                set_names(&sets.sure)
+            );
+        }
+        // Sets inside the band may be as good: say so rather than crown one.
+        if !sets.near.is_empty() {
+            let _ = writeln!(
+                o,
+                "\nNear misses (within the noise of the {} % threshold, so possibly just as sufficient): {}.",
+                pm_.options.tau_pct,
+                set_names(&sets.near)
             );
         }
         if !pm_.dropped.is_empty() {
@@ -463,9 +507,10 @@ pub fn render(pm_: &PostMortem) -> String {
     {
         let _ = writeln!(
             o,
-            "| Reduce the frequency or duration of: {} | prevent | up to {} parcel-min | site ops | [{}] |",
+            "| Reduce the frequency or duration of: {} | prevent | up to {} ± {} parcel-min | site ops | [{}] |",
             describe_kind(&pm_.candidates[i].spec.kind),
-            pminf(att.shapley(i)),
+            pmin(att.alone(i)),
+            pminf(loss_band),
             r(1 << i)
         );
     }
@@ -636,6 +681,15 @@ const fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str
     if n == 1 { one } else { many }
 }
 
+/// Responsibility `1/(1+k)` for contingency size `k` (`None`: never pivotal).
+fn resp_text(k: Option<u32>) -> String {
+    match k {
+        None => "0".to_owned(),
+        Some(0) => "1".to_owned(),
+        Some(k) => format!("1/{}", k + 1),
+    }
+}
+
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
     c.next().map_or_else(String::new, |f| {
@@ -695,6 +749,55 @@ mod tests {
             att.scale * i128::from(att.total())
         );
         insta::assert_snapshot!(render(&pm));
+    }
+
+    /// #16: a cause whose share is within its noise band is not ranked; it is
+    /// listed once as within noise, and every ranked share carries a ±.
+    #[test]
+    fn a_cause_within_noise_is_not_ranked() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        cfg.name = "small-jam".to_owned();
+        let busy = switchyard_core::sim::Sim::new(&cfg)
+            .unwrap()
+            .world()
+            .destination_chute[0];
+        cfg.faults = vec![
+            FaultSpec {
+                at: 1_200,
+                duration: 1_800,
+                kind: FaultKind::ChuteJam { chute: busy },
+            },
+            // A scanner drift of 0 ppm changes nothing: a null cause.
+            FaultSpec {
+                at: 1_320,
+                duration: 600,
+                kind: FaultKind::ScannerDrift {
+                    station: switchyard_core::ids::StationId(1),
+                    error_rate_ppm: 0,
+                },
+            },
+        ];
+        let pm = run(
+            &cfg,
+            6_000,
+            &Options {
+                dither: 2,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        let md = render(&pm);
+        assert!(md.contains("Within noise (share no larger"), "{md}");
+        assert!(
+            !md.contains(
+                "
+| 2 |"
+            ),
+            "null cause was ranked:
+{md}"
+        );
+        let row = md.lines().find(|l| l.starts_with("| 1 |")).unwrap();
+        assert!(row.matches('±').count() >= 2, "share lacks ±: {row}");
     }
 
     #[test]
