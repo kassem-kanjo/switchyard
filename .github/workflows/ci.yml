@@ -93,3 +93,49 @@ jobs:
       - name: Build (includes the WASM build)
         working-directory: viewer
         run: npm run build
+
+  # ADR 0002: same scenario + seed must give a bit-identical state hash on
+  # every platform. Reference values live in scripts/determinism/expected.txt.
+  determinism-native:
+    name: determinism (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p switchyard-cli
+      - name: Compare state hashes with expected.txt
+        shell: bash
+        run: bash scripts/determinism/check.sh
+
+  determinism-wasm:
+    name: determinism (wasm, node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Same cache key as the viewer job; version must match Cargo.lock.
+      - name: Cache wasm-bindgen-cli
+        id: wbg-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-cli-0.2.129-${{ runner.os }}
+      - name: Install wasm-bindgen-cli
+        if: steps.wbg-cache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - run: cargo build -p switchyard-wasm --target wasm32-unknown-unknown --release
+      - name: Generate Node bindings
+        run: wasm-bindgen --target nodejs --out-dir "$RUNNER_TEMP/wbg" target/wasm32-unknown-unknown/release/switchyard_wasm.wasm
+      - name: Compare state hashes with expected.txt
+        run: node scripts/determinism/wasm-hash.mjs "$RUNNER_TEMP/wbg"

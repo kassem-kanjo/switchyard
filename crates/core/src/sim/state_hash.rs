@@ -7,7 +7,8 @@ use crate::world::Goal;
 impl Sim {
     /// FNV-1a hash of a canonical encoding of the complete sim state: tick,
     /// every entity column in id order, counters and the position of every
-    /// random stream (ADR 0002 §5). Equal hashes across platforms and between
+    /// random stream (ADR 0002 §5), plus the fault schedule and the state of
+    /// active faults when there is a schedule. Equal hashes across platforms and between
     /// native and WASM are the determinism check.
     #[must_use]
     pub fn state_hash(&self) -> u64 {
@@ -26,18 +27,7 @@ impl Sim {
             h.write_u32(r.pos[i]);
             h.write_u8(r.state[i] as u8);
             h.write_opt_u32(r.parcel[i].map(|p| p.0));
-            match r.goal[i] {
-                None => h.write_u8(0),
-                Some(Goal::Station(s)) => {
-                    h.write_u8(1);
-                    h.write_u16(s.0);
-                }
-                Some(Goal::Chute(c)) => {
-                    h.write_u8(2);
-                    h.write_u16(c.0);
-                }
-                Some(Goal::Park) => h.write_u8(3),
-            }
+            hash_goal(&mut h, r.goal[i]);
             h.write_u16(r.timer[i]);
             h.write_u32(r.waited[i]);
             h.write_u32(r.goal_since[i]);
@@ -92,6 +82,42 @@ impl Sim {
         }
         h.write_u32(self.scanner_ppm);
         self.planner.hash_state(&mut h);
+        // Faults are opt-in: a run without a schedule hashes exactly as
+        // before faults existed, so healthy reference hashes stay valid.
+        if !self.faults.is_empty() {
+            self.hash_faults(&mut h);
+        }
+        // Likewise interventions: per-station caps that differ from the
+        // configured cap, and robot additions still to come. (Remaps show in
+        // `destination_chute`, added robots in the robot columns.)
+        let global = self.config.fleet.max_inbound_per_station;
+        if self.station_cap.iter().any(|&c| c != global) || !self.additions.is_empty() {
+            h.write(b"interventions-v1");
+            for &c in &self.station_cap {
+                h.write_u16(c);
+            }
+            h.write_u64(self.additions.len() as u64);
+            for a in &self.additions {
+                h.write_u32(a.at);
+                h.write_u32(a.robots);
+            }
+        }
         h.finish()
+    }
+}
+
+/// The canonical encoding of a robot's goal (shared by both hashes).
+pub(super) fn hash_goal(h: &mut Fnv1a, goal: Option<Goal>) {
+    match goal {
+        None => h.write_u8(0),
+        Some(Goal::Station(s)) => {
+            h.write_u8(1);
+            h.write_u16(s.0);
+        }
+        Some(Goal::Chute(c)) => {
+            h.write_u8(2);
+            h.write_u16(c.0);
+        }
+        Some(Goal::Park) => h.write_u8(3),
     }
 }

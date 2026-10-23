@@ -1,0 +1,61 @@
+# Switchyard chaos preset: peak surge.
+#
+# Every induction station receives twice its normal volume for 20 minutes
+# from minute 30 (a late inbound truck wave). The extra parcels come from
+# the surge's own random streams, so the regular parcels are identical to
+# the twin's and the score measures how much the surge delays them.
+#
+# Base: the medium preset (crates/core/scenarios/medium.toml), unchanged
+# apart from the name and the fault schedule below. Run it with
+#   switchyard chaos --scenario peak-surge --ticks 14400 --seeds 1..5
+# which scores each seed against its fault-free twin (same seed, no faults).
+# Times are ticks (1 tick = 0.5 s): 3600 = minute 30.
+# Source of truth: crates/core/scenarios/chaos/; the copy in the
+# repository's scenarios/chaos/ directory must match it.
+
+name = "peak-surge"
+seed = 1
+
+[floor]
+# 64 x 54 cells: a 20 x 15 chute lattice (300 chutes).
+width = 64
+height = 54
+stations = 8
+south_margin = 6
+
+[fleet]
+robots = 200
+# Robots that may head to (or load at) one station at once.
+max_inbound_per_station = 6
+
+[arrivals]
+# 8 stations x 800/h = 6,400 parcels/h offered (32 per robot per hour).
+parcels_per_hour_per_station = 800
+destinations = 300
+zipf_s_milli = 800
+
+[timing]
+# Scan-and-place at induction: 4 ticks = 2 s (about 1,200/h per station at
+# full utilisation).
+load_ticks = 4
+drop_ticks = 2
+
+[chutes]
+bag_capacity = 50
+bag_swap_ticks = 60
+mapping = "popularity_near_induction"
+
+[scanner]
+error_rate_ppm = 0
+
+[guidance]
+against_flow_cost = 3
+
+[planner]
+watchdog_ticks = 600
+
+[[faults]]
+kind = "volume-surge"
+factor_pct = 200
+at = 3600
+duration = 2400

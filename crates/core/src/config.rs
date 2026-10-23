@@ -14,6 +14,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::TICKS_PER_HOUR;
+use crate::Tick;
+use crate::faults::FaultSpec;
+use crate::ids::{ChuteId, DestinationId, FaultId, StationId};
 
 /// A complete, self-contained description of one simulation scenario.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +26,13 @@ pub struct ScenarioConfig {
     pub name: String,
     /// Master seed. Every random stream is derived from `(seed, stream_id)`.
     pub seed: u64,
+    /// Faults of the schedule that are switched off: the counterfactual
+    /// intervention `do(fault := healthy)` ([`ScenarioConfig::without_fault`]).
+    /// A disabled fault keeps its place, so every [`FaultId`] (the index in
+    /// `faults`) means the same fault in the original run and in every
+    /// replay. Ids beyond the schedule are ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_faults: Vec<FaultId>,
     /// Floor geometry.
     pub floor: FloorConfig,
     /// Robot fleet.
@@ -43,6 +53,14 @@ pub struct ScenarioConfig {
     /// Planner safety nets.
     #[serde(default)]
     pub planner: PlannerConfig,
+    /// How the floor responds to faults (`[recovery]`).
+    #[serde(default)]
+    pub recovery: RecoveryConfig,
+    /// The fault schedule (`[[faults]]`), empty for a healthy run. Faults are
+    /// opt-in: a scenario without them simulates exactly as before. See
+    /// [`crate::faults`] for the kinds and their healthy counterparts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faults: Vec<FaultSpec>,
 }
 
 /// Floor geometry, consumed by [`crate::layout::generate`].
@@ -76,6 +94,47 @@ pub struct FleetConfig {
     /// growing backlog, 4 left a backlog on `large`, 8 gained nothing).
     #[serde(default = "default_max_inbound")]
     pub max_inbound_per_station: u16,
+    /// Per-station overrides of `max_inbound_per_station`
+    /// (`[[fleet.station_caps]]`; an intervention, see
+    /// [`crate::interventions`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_caps: Vec<StationCap>,
+    /// Robots added to the fleet during the run (`[[fleet.additions]]`; an
+    /// intervention). They appear at the start of tick `at`, idle, on the
+    /// first free parking cells (then the first free floor cells), in
+    /// row-major order; if the floor is full, fewer are added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additions: Vec<RobotAddition>,
+}
+
+/// A per-station inbound cap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StationCap {
+    /// The station.
+    pub station: StationId,
+    /// Robots that may head to (or load at) it at once (at least 1).
+    pub cap: u16,
+}
+
+/// Robots joining the fleet at a tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RobotAddition {
+    /// The tick at whose start they appear.
+    pub at: Tick,
+    /// How many (at least 1).
+    pub robots: u32,
+}
+
+/// A destination sent to a chute other than the mapping's choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestinationRemap {
+    /// The destination.
+    pub destination: DestinationId,
+    /// The chute that serves it instead.
+    pub chute: ChuteId,
 }
 
 const fn default_max_inbound() -> u16 {
@@ -122,6 +181,10 @@ pub struct ChuteConfig {
     pub bag_swap_ticks: u32,
     /// How destinations are assigned to chutes.
     pub mapping: ChuteMapping,
+    /// Overrides applied after the mapping (`[[chutes.remap]]`; an
+    /// intervention, see [`crate::interventions`]). Later entries win.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub remap: Vec<DestinationRemap>,
 }
 
 impl Default for ChuteConfig {
@@ -132,6 +195,7 @@ impl Default for ChuteConfig {
             bag_capacity: 50,
             bag_swap_ticks: 60,
             mapping: ChuteMapping::RoundRobin,
+            remap: Vec::new(),
         }
     }
 }
@@ -162,6 +226,26 @@ pub struct ScannerConfig {
     pub error_rate_ppm: u32,
 }
 
+/// How operators respond to faults (`[recovery]`). Only matters when the
+/// scenario has faults.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RecoveryConfig {
+    /// A robot that fails on an induction cell blocks its station. After
+    /// this many ticks (default 600 = 5 minutes) operators push it to the
+    /// nearest free cell; it stays failed (and keeps its parcel) until its
+    /// fault ends. `u32::MAX` never clears it.
+    pub clear_after_ticks: u32,
+}
+
+impl Default for RecoveryConfig {
+    fn default() -> Self {
+        Self {
+            clear_after_ticks: 600,
+        }
+    }
+}
+
 /// Lane guidance (ADR 0003).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -187,13 +271,20 @@ pub struct PlannerConfig {
     /// the sim emits `Event::Stalled` (a deadlock or livelock) instead of
     /// silently going quiet (ADR 0003, robustness).
     pub watchdog_ticks: u32,
+    /// A wait-for cycle must persist this many consecutive ticks before the
+    /// sim reports it as a deadlock (`Event::DeadlockDetected`). PIBT clears
+    /// most head-on meetings within a tick or two, so a short persistence
+    /// requirement filters out those transient 2-cycles.
+    pub deadlock_ticks: u32,
 }
 
 impl Default for PlannerConfig {
     fn default() -> Self {
-        // 5 simulated minutes: longer than any legitimate wait (a bag swap).
         Self {
+            // 5 simulated minutes: longer than any legitimate wait (a bag swap).
             watchdog_ticks: 600,
+            // 5 simulated seconds.
+            deadlock_ticks: 10,
         }
     }
 }
@@ -247,6 +338,10 @@ pub enum ConfigError {
     /// The generated layout broke an invariant (a station or chute is
     /// unreachable). This is a generator bug or a degenerate floor.
     Unreachable(String),
+    /// A fault in the schedule is invalid (unknown robot, chute or station,
+    /// a blocked cell that is not open floor, a factor out of range, or a
+    /// start tick in the past).
+    BadFault(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -278,6 +373,7 @@ impl fmt::Display for ConfigError {
                 max,
             } => write!(f, "{field} = {value} is outside {min}..={max}"),
             Self::Unreachable(msg) => write!(f, "layout is not fully connected: {msg}"),
+            Self::BadFault(msg) => write!(f, "invalid fault: {msg}"),
         }
     }
 }
@@ -339,6 +435,7 @@ impl ScenarioConfig {
             ("timing.drop_ticks", u32::from(self.timing.drop_ticks)),
             ("chutes.bag_swap_ticks", self.chutes.bag_swap_ticks),
             ("planner.watchdog_ticks", self.planner.watchdog_ticks),
+            ("planner.deadlock_ticks", self.planner.deadlock_ticks),
         ];
         if let Some((field, _)) = durations.iter().find(|(_, v)| *v == 0) {
             return Err(ConfigError::ZeroDuration(field));
@@ -391,7 +488,58 @@ impl ScenarioConfig {
                 });
             }
         }
+        for fault in &self.faults {
+            fault.validate()?;
+        }
+        if let Some(c) = self.fleet.station_caps.iter().find(|c| c.cap == 0) {
+            return Err(ConfigError::OutOfRange {
+                field: "fleet.station_caps.cap",
+                value: u64::from(c.cap),
+                min: 1,
+                max: u64::from(u16::MAX),
+            });
+        }
+        if self.fleet.additions.iter().any(|a| a.robots == 0) {
+            return Err(ConfigError::OutOfRange {
+                field: "fleet.additions.robots",
+                value: 0,
+                min: 1,
+                max: u64::from(u32::MAX),
+            });
+        }
         Ok(())
+    }
+
+    /// The same scenario with fault `id` switched off: the counterfactual
+    /// intervention `do(fault := healthy)` (ADR 0005; see [`crate::faults`]
+    /// for each kind's healthy counterpart). The fault is disabled in place
+    /// ([`ScenarioConfig::disabled_faults`]), so the other faults keep their
+    /// ids and their random streams, and events and blame join across the
+    /// original run and the replay by `FaultId`.
+    #[must_use]
+    pub fn without_fault(&self, id: FaultId) -> Self {
+        let mut cfg = self.clone();
+        if !cfg.disabled_faults.contains(&id) {
+            cfg.disabled_faults.push(id);
+            cfg.disabled_faults.sort_unstable();
+        }
+        cfg
+    }
+
+    /// Is fault `id` in the schedule and switched on?
+    #[must_use]
+    pub fn fault_enabled(&self, id: FaultId) -> bool {
+        id.index() < self.faults.len() && !self.disabled_faults.contains(&id)
+    }
+
+    /// The faults that will run, with their stable ids.
+    pub fn enabled_faults(&self) -> impl Iterator<Item = (FaultId, &FaultSpec)> {
+        self.faults.iter().enumerate().filter_map(|(i, f)| {
+            // Schedules are far shorter than u32::MAX entries.
+            #[allow(clippy::cast_possible_truncation)]
+            let id = FaultId(i as u32);
+            self.fault_enabled(id).then_some((id, f))
+        })
     }
 }
 

@@ -41,6 +41,14 @@ impl StreamId {
     pub const fn scanner(station: u16) -> Self {
         Self(0x0004_0000 | station as u64)
     }
+
+    /// Arrival counts of one volume-surge fault at one station. `fault_key`
+    /// is the fault's content key ([`crate::faults::FaultSpec::content_key`]),
+    /// so the stream does not depend on the fault's place in the schedule.
+    #[must_use]
+    pub const fn surge(fault_key: u32, station: u16) -> Self {
+        Self(0x0005_0000_0000_0000 | (fault_key as u64) << 16 | station as u64)
+    }
 }
 
 /// A deterministic random stream (a thin wrapper, so the rest of the core

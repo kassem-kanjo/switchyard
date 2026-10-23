@@ -14,7 +14,11 @@ path = "src/main.rs"
 
 [dependencies]
 switchyard-core.workspace = true
+switchyard-trace.workspace = true
 clap.workspace = true
+switchyard-analysis.workspace = true
+# Seeds and twin runs run in parallel (parallelism only across sims, ADR 0002).
+rayon = "1"
 
 [lints]
 workspace = true

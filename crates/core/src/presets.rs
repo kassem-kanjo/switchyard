@@ -23,8 +23,30 @@ pub const ALL: &[(&str, &str)] = &[
     ("large", LARGE_TOML),
 ];
 
-/// The TOML text of the preset called `name`, if there is one.
+/// Chaos presets (`scenarios/chaos/`): the medium floor with a fault
+/// schedule, as `(name, toml)`. Demo material for `switchyard chaos`; each
+/// produces a visible dip and recovery against its fault-free twin.
+pub const CHAOS: &[(&str, &str)] = &[
+    (
+        "aisle-7-blocked",
+        include_str!("../scenarios/chaos/aisle-7-blocked.toml"),
+    ),
+    (
+        "peak-surge",
+        include_str!("../scenarios/chaos/peak-surge.toml"),
+    ),
+    (
+        "two-dead-robots-and-a-jam",
+        include_str!("../scenarios/chaos/two-dead-robots-and-a-jam.toml"),
+    ),
+];
+
+/// The TOML text of the preset called `name` (a hub preset or a chaos
+/// preset), if there is one.
 #[must_use]
 pub fn by_name(name: &str) -> Option<&'static str> {
-    ALL.iter().find(|(n, _)| *n == name).map(|(_, t)| *t)
+    ALL.iter()
+        .chain(CHAOS)
+        .find(|(n, _)| *n == name)
+        .map(|(_, t)| *t)
 }

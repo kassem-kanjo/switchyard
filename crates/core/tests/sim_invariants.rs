@@ -293,7 +293,7 @@ fn every_parcel_follows_the_lifecycle_exactly() {
 fn wait_events_match_the_wait_for_record() {
     let mut sim = Sim::new(&small(9)).unwrap();
     let mut events = Vec::new();
-    let mut waits = 0;
+    let (mut waits, mut deep) = (0, 0);
     for _ in 0..TICKS {
         events.clear();
         sim.step(&mut events);
@@ -306,7 +306,21 @@ fn wait_events_match_the_wait_for_record() {
                 ..
             } = *e
             {
-                assert_eq!(direct, root, "CP1 sets root = direct");
+                // A cycle's chains are rooted at its lowest member: as
+                // `Cycle` once it is a persisting deadlock, as `BlockedBy`
+                // while it is a transient meeting.
+                let expected = reference_root(sim.wait_for(), robot.index());
+                let young = match expected {
+                    Some(WaitCause::Cycle(m)) => Some(WaitCause::BlockedBy(m)),
+                    other => other,
+                };
+                assert!(
+                    Some(root) == expected || Some(root) == young,
+                    "root of {robot}: {root:?}, expected {expected:?}"
+                );
+                if root != direct {
+                    deep += 1;
+                }
                 assert!(
                     from_events[robot.index()].is_none(),
                     "two waits for {robot}"
@@ -334,6 +348,29 @@ fn wait_events_match_the_wait_for_record() {
         assert_eq!(from_events, working, "tick {}", sim.tick() - 1);
     }
     assert!(waits > 0, "a busy floor should produce some waits");
+    assert!(deep > 0, "no chain was longer than one edge");
+}
+
+/// The root of `r`'s chain by the definition (ARCHITECTURE §4), walked
+/// naively without memoisation: an independent check of the sim's walk.
+/// (No faults here, so no robot is failed.)
+fn reference_root(waits: &[Option<WaitCause>], r: usize) -> Option<WaitCause> {
+    let mut path = vec![r];
+    let mut cause = waits[r]?;
+    loop {
+        let WaitCause::BlockedBy(b) = cause else {
+            return Some(cause);
+        };
+        let Some(next) = waits[b.index()] else {
+            return Some(cause);
+        };
+        if let Some(i) = path.iter().position(|&p| p == b.index()) {
+            let lowest = path[i..].iter().min().copied().unwrap();
+            return Some(WaitCause::Cycle(RobotId(u32::try_from(lowest).unwrap())));
+        }
+        path.push(b.index());
+        cause = next;
+    }
 }
 
 #[test]
@@ -391,7 +428,7 @@ fn bag_swaps_make_robots_wait_with_chute_unavailable() {
 
 /// A planner that never moves anyone and blames the next robot: every robot
 /// with work is stuck, as in a gridlock.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Frozen;
 
 impl Planner for Frozen {
@@ -409,6 +446,10 @@ impl Planner for Frozen {
     }
 
     fn hash_state(&self, _: &mut Fnv1a) {}
+
+    fn box_clone(&self) -> Box<dyn Planner> {
+        Box::new(self.clone())
+    }
 }
 
 fn frozen_run(ticks: u32) -> (Sim, Vec<Event>) {

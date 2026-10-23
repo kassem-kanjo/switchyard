@@ -8,13 +8,17 @@
 //! (ADR 0002 §4). Events are appended as each phase runs, so the stream
 //! follows this order too.
 //!
-//! 1. Apply faults that start or end at this tick *(CP2; none yet)*.
+//! 1. Apply faults that end, then faults that start, at this tick
+//!    ([`crate::faults`]); a fault that closes cells rebuilds the distance
+//!    tables.
 //! 2. Generate arrivals: a Poisson count per station, then a Zipf
-//!    destination per parcel, each station on its own streams.
+//!    destination per parcel, each station on its own streams; then the
+//!    extra arrivals of active volume surges, from the surges' own streams.
 //! 3. Advance timers: bag swaps finish; loads finish (the scanner reads the
 //!    parcel and the robot heads for its chute); drops finish (the parcel is
 //!    delivered, a full bag starts a swap).
-//! 4. Assign work: each station, in id order, hands its oldest unclaimed
+//! 4. Assign work: each station that is up (no induction outage), in id
+//!    order, hands its oldest unclaimed
 //!    parcels to the nearest idle robots (by guided distance, ties by id),
 //!    up to `fleet.max_inbound_per_station`. Idle robots left without work head
 //!    for the parking lane (throttling, see below).
@@ -24,10 +28,12 @@
 //! 7. Resolve arrivals at goals: start loads, and start drops at chutes that
 //!    can take a parcel.
 //! 8. Attribute waits: every robot's direct cause goes into the tick's
-//!    wait-for record ([`Sim::wait_for`]); robots with work (heading to a
-//!    station or a chute) also get a `RobotWaited` (CP1 sets
-//!    `root = direct`; CP2 walks the wait-for graph), and a `RobotStalled`
-//!    when they have waited `planner.watchdog_ticks` ticks in a row.
+//!    wait-for record ([`Sim::wait_for`]); the record is walked to each
+//!    robot's root ([`crate::causality`]); robots with work (heading to a
+//!    station or a chute) get a `RobotWaited { direct, root }`, and a
+//!    `RobotStalled` when they have waited `planner.watchdog_ticks` ticks in
+//!    a row; a wait-for cycle that has persisted `planner.deadlock_ticks`
+//!    ticks is reported with `DeadlockDetected`.
 //! 9. Watchdog: if robots have work but none has progressed for
 //!    `planner.watchdog_ticks`, emit `Stalled`.
 //! 10. Advance the tick. The state hash is computed on demand from the
@@ -45,23 +51,30 @@
 //! spot. It is reassigned from wherever it is as soon as work appears.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
+mod assign;
+mod attribution;
+mod faults;
 mod mapping;
+mod replay;
 mod snapshot;
 mod state_hash;
 
 pub use snapshot::Snapshot;
 
 use crate::arrivals::{PoissonTable, ZipfTable};
-use crate::config::{ConfigError, ScenarioConfig};
+use crate::causality::{DeadlockWatch, RootWalker};
+use crate::config::{ConfigError, RobotAddition, ScenarioConfig};
 use crate::events::{ChuteState, Event, WaitCause};
-use crate::guidance::DistanceTables;
-use crate::ids::{ChuteId, DestinationId, ParcelId, RobotId, StationId};
+use crate::grid::CellIdx;
+use crate::guidance::{DistanceTables, UNREACHABLE};
+use crate::ids::{ChuteId, DestinationId, FaultId, ParcelId, RobotId, StationId};
 use crate::layout::{self, Layout};
 use crate::pibt::PibtPlanner;
 use crate::planner::{PlanInput, PlanOutput, Planner};
 use crate::rng::{Stream, StreamId};
-use crate::world::{Goal, Phase, RobotState, Robots, Stations, World};
+use crate::world::{Goal, Phase, RobotState, World};
 use crate::{TICKS_PER_HOUR, Tick};
 
 /// Aggregate counters of a run.
@@ -76,7 +89,8 @@ pub struct Stats {
     pub arrived: u64,
     /// Parcels waiting at a station (phases `Queued`, `AwaitingRobot`).
     pub queued: u64,
-    /// Parcels on a robot (phases `Loading` through `ChuteWait`).
+    /// Parcels on a robot (phases `Loading` through `ChuteWait`), including
+    /// parcels stuck on a failed robot.
     pub in_flight: u64,
     /// Parcels dropped into a chute (mis-sorted ones included).
     pub delivered: u64,
@@ -97,11 +111,19 @@ impl Stats {
 }
 
 /// A running simulation.
-#[derive(Debug)]
+///
+/// `Clone` makes a checkpoint: stepping a clone reproduces the original run
+/// bit-for-bit (see [`replay`] for checkpoints and counterfactual replays).
+/// The layout and the distance tables are shared between clones.
+#[derive(Clone, Debug)]
 pub struct Sim {
     config: ScenarioConfig,
-    layout: Layout,
-    distances: DistanceTables,
+    layout: Arc<Layout>,
+    /// Guided distances in force: `healthy`, or tables with the cells of
+    /// active faults closed ([`crate::faults`]).
+    distances: Arc<DistanceTables>,
+    /// Guided distances of the healthy floor.
+    healthy: Arc<DistanceTables>,
     world: World,
     tick: Tick,
     /// Current arrival rate of each station, per hour (changed by
@@ -116,6 +138,13 @@ pub struct Sim {
     /// [`Sim::set_scanner_error_rate`]).
     scanner_ppm: u32,
     planner: Box<dyn Planner>,
+    /// The fault schedule and the state of active faults.
+    faults: faults::Faults,
+    /// Inbound cap of each station (`fleet.max_inbound_per_station`, with
+    /// `fleet.station_caps` and runtime interventions applied).
+    station_cap: Vec<u16>,
+    /// Robot additions still to come.
+    additions: Vec<RobotAddition>,
     // Counters, kept incrementally (Stats checks them against the world).
     arrived: u64,
     delivered: u64,
@@ -127,6 +156,16 @@ pub struct Sim {
     /// The direct wait cause of each robot in the last tick (its out-edge in
     /// the tick's wait-for graph).
     waits: Vec<Option<WaitCause>>,
+    /// Root-cause walk over `waits` (scratch, rebuilt every tick).
+    walker: RootWalker,
+    /// Persistence tracking of wait-for cycles. Observer state: it decides
+    /// only when `DeadlockDetected` is emitted, never what robots do, so it
+    /// is not part of the state hash (like `waits`).
+    deadlocks: DeadlockWatch,
+    /// Each robot's reported root cause in the last tick (scratch).
+    roots: Vec<Option<WaitCause>>,
+    /// `DeadlockDetected` events of the tick, emitted after the waits.
+    deadlock_events: Vec<Event>,
     // Per-tick scratch buffers, reused to avoid allocation in the loop.
     plan_goal: Vec<Option<Goal>>,
     plan_movable: Vec<bool>,
@@ -134,6 +173,11 @@ pub struct Sim {
     plan_out: PlanOutput,
     /// Robots that started the tick at their chute, unable to drop.
     at_chute: Vec<bool>,
+    /// Robots whose goal a fault has cut off this tick, and the fault blamed.
+    cut_by: Vec<Option<FaultId>>,
+    /// Robots on a detour this tick (closer to their goal only on the
+    /// faulted floor), with the cell they left.
+    detour: Vec<Option<CellIdx>>,
     idle: Vec<u32>,
 }
 
@@ -158,7 +202,10 @@ impl Sim {
     ) -> Result<Self, ConfigError> {
         config.validate()?;
         let layout = layout::generate(&config.floor)?;
-        let distances = DistanceTables::build(&layout, config.guidance.against_flow_cost);
+        let distances = Arc::new(DistanceTables::build(
+            &layout,
+            config.guidance.against_flow_cost,
+        ));
 
         let capacity = layout.spawn_capacity();
         let robots = config.fleet.robots;
@@ -197,6 +244,7 @@ impl Sim {
         );
 
         let stations = layout.stations.len();
+        let mut station_cap = vec![config.fleet.max_inbound_per_station; stations];
         world.stations.cell.clone_from(&layout.stations);
         world.stations.queue = vec![VecDeque::new(); stations];
         world.stations.inbound = vec![0; stations];
@@ -210,10 +258,32 @@ impl Sim {
                 .collect::<Vec<_>>()
         };
         let rate = config.arrivals.parcels_per_hour_per_station;
+        let mut faults = faults::Faults::new(n, chutes, stations);
+        for (i, spec) in config.faults.iter().enumerate() {
+            spec.validate_for(&layout, n)?;
+            faults.specs.push(spec.clone());
+            faults
+                .status
+                .push(if config.fault_enabled(faults::fault_id(i)) {
+                    faults::Status::Pending
+                } else {
+                    faults::Status::Disabled
+                });
+        }
 
-        Ok(Self {
+        for c in &config.fleet.station_caps {
+            replay::check_cap(c, stations)?;
+            station_cap[c.station.index()] = c.cap;
+        }
+        for r in &config.chutes.remap {
+            replay::check_remap(r, world.destination_chute.len(), chutes)?;
+            world.destination_chute[r.destination.index()] = r.chute;
+        }
+
+        let mut sim = Self {
             config: config.clone(),
-            layout,
+            layout: Arc::new(layout),
+            healthy: Arc::clone(&distances),
             distances,
             world,
             tick: 0,
@@ -225,19 +295,44 @@ impl Sim {
             scanner_streams: streams(StreamId::scanner),
             scanner_ppm: config.scanner.error_rate_ppm,
             planner,
+            faults,
+            station_cap,
+            additions: config.fleet.additions.clone(),
             arrived: 0,
             delivered: 0,
             mis_sorted: 0,
             last_progress: 0,
             last_stall: 0,
-            waits: vec![None; n],
+            waits: Vec::new(),
+            walker: RootWalker::new(),
+            deadlocks: DeadlockWatch::new(config.planner.deadlock_ticks),
+            roots: Vec::new(),
+            deadlock_events: Vec::new(),
             plan_goal: Vec::with_capacity(n),
             plan_movable: Vec::with_capacity(n),
             plan_priority: Vec::with_capacity(n),
             plan_out: PlanOutput::default(),
-            at_chute: vec![false; n],
+            at_chute: Vec::new(),
+            cut_by: Vec::new(),
+            detour: Vec::new(),
             idle: Vec::with_capacity(n),
-        })
+        };
+        sim.size_per_robot();
+        Ok(sim)
+    }
+
+    /// Size every per-robot buffer outside the world's robot columns to the
+    /// fleet (at construction, and when robots join).
+    fn size_per_robot(&mut self) {
+        let n = self.world.robots.len();
+        self.waits.resize(n, None);
+        self.roots.resize(n, None);
+        self.at_chute.resize(n, false);
+        self.cut_by.resize(n, None);
+        self.detour.resize(n, None);
+        self.faults.failed_by.resize(n, None);
+        self.faults.pre_fail.resize(n, RobotState::Idle);
+        self.faults.failed_since.resize(n, 0);
     }
 
     /// The scenario this sim was built from.
@@ -252,7 +347,8 @@ impl Sim {
         &self.layout
     }
 
-    /// The guided distance tables the planner uses.
+    /// The guided distance tables the planner uses (rebuilt around closed
+    /// cells while an aisle block or a robot failure is active).
     #[must_use]
     pub fn distances(&self) -> &DistanceTables {
         &self.distances
@@ -336,8 +432,10 @@ impl Sim {
     /// cleared, so a caller can accumulate a whole run).
     pub fn step(&mut self, out: &mut Vec<Event>) {
         let t = self.tick;
-        // 1. Faults: none until CP2.
+        self.apply_additions(t, out);
+        self.apply_faults(t, out);
         self.generate_arrivals(t, out);
+        self.generate_surge_arrivals(t, out);
         self.advance_timers(t, out);
         self.assign_work(t, out);
         self.plan_and_move(t, out);
@@ -358,19 +456,17 @@ impl Sim {
             .iter()
             .map(|q| q.len() as u64)
             .sum();
+        // A robot's parcel is on board from `Loading` on (a robot still
+        // driving to the station has only claimed it), whatever the robot's
+        // state: a failed robot can be carrying one.
+        let phases = &self.world.parcels.phase;
         let in_flight = self
             .world
             .robots
-            .state
+            .parcel
             .iter()
-            .zip(&self.world.robots.parcel)
-            .filter(|(s, p)| {
-                p.is_some()
-                    && matches!(
-                        s,
-                        RobotState::Loading | RobotState::ToChute | RobotState::Dropping
-                    )
-            })
+            .flatten()
+            .filter(|p| !matches!(phases[p.index()], Phase::Queued | Phase::AwaitingRobot))
             .count() as u64;
         Stats {
             tick: self.tick,
@@ -395,37 +491,52 @@ impl Sim {
             for _ in 0..count {
                 let ordinal = self.world.stations.arrived[s];
                 self.world.stations.arrived[s] += 1;
-                let destination = DestinationId(
-                    self.zipf
-                        .sample_keyed(&mut self.destination_streams[s], u64::from(ordinal)),
-                );
-                let station = station_id(s);
-                let parcel = ParcelId(u32::try_from(self.world.parcels.len()).unwrap_or(u32::MAX));
-                let p = &mut self.world.parcels;
-                p.station.push(station);
-                p.ordinal.push(ordinal);
-                p.destination.push(destination);
-                p.arrived.push(t);
-                p.phase.push(Phase::Queued);
-                p.phase_since.push(t);
-                p.robot.push(None);
-                p.target.push(None);
-                p.chute.push(None);
-                self.world.stations.queue[s].push_back(parcel);
-                self.arrived += 1;
-                out.push(Event::ParcelArrived {
-                    tick: t,
-                    parcel,
-                    station,
-                    destination,
-                });
-                out.push(Event::ParcelPhase {
-                    tick: t,
-                    parcel,
-                    phase: Phase::Queued,
-                });
+                self.push_parcel(t, station_id(s), ordinal, u64::from(ordinal), out);
             }
         }
+    }
+
+    /// A parcel arrives at `station`: draw its destination at `key` on the
+    /// station's destination stream and queue it.
+    fn push_parcel(
+        &mut self,
+        t: Tick,
+        station: StationId,
+        ordinal: u32,
+        key: u64,
+        out: &mut Vec<Event>,
+    ) {
+        let s = station.index();
+        let destination = DestinationId(
+            self.zipf
+                .sample_keyed(&mut self.destination_streams[s], key),
+        );
+        let parcel = ParcelId(u32::try_from(self.world.parcels.len()).unwrap_or(u32::MAX));
+        let p = &mut self.world.parcels;
+        p.station.push(station);
+        p.ordinal.push(ordinal);
+        p.key.push(key);
+        p.destination.push(destination);
+        p.arrived.push(t);
+        p.phase.push(Phase::Queued);
+        p.phase_since.push(t);
+        p.robot.push(None);
+        p.target.push(None);
+        p.chute.push(None);
+        p.misread.push(false);
+        self.world.stations.queue[s].push_back(parcel);
+        self.arrived += 1;
+        out.push(Event::ParcelArrived {
+            tick: t,
+            parcel,
+            station,
+            destination,
+        });
+        out.push(Event::ParcelPhase {
+            tick: t,
+            parcel,
+            phase: Phase::Queued,
+        });
     }
 
     /// Phase 3: bag swaps, then loading and dropping robots.
@@ -485,24 +596,29 @@ impl Sim {
     }
 
     /// The scanner at the parcel's station reads it: usually the chute of
-    /// its destination, but with probability `scanner_ppm` a uniformly chosen
+    /// its destination, but with probability `ppm` (the station's rate in
+    /// force; see [`crate::faults`] for scanner drift) a uniformly chosen
     /// other chute. Both draws (misread? which chute?) are keyed on the
-    /// parcel's ordinal at its station and always taken, so a parcel's scan
-    /// outcome depends only on the parcel and the rate in force when it is
-    /// scanned: a scanner-drift fault changes the parcels scanned during it
-    /// and no others.
+    /// parcel's draw key and always taken, so a parcel's scan outcome depends
+    /// only on the parcel and the rate in force when it is scanned: a
+    /// scanner-drift fault changes the parcels scanned during it and no
+    /// others. A misread is recorded in `parcels.misread`, which is what
+    /// makes the drop a mis-sort.
     fn scan(&mut self, parcel: ParcelId) -> ChuteId {
         let i = parcel.index();
+        let station = self.world.parcels.station[i];
+        let ppm = self.scanner_ppm_at(station);
         let p = &self.world.parcels;
         let correct = self.world.destination_chute[p.destination[i].index()];
-        let key = u64::from(p.ordinal[i]) * 2;
-        let stream = &mut self.scanner_streams[p.station[i].index()];
+        let key = p.key[i] * 2;
+        let stream = &mut self.scanner_streams[station.index()];
         let chutes = self.world.chutes.cell.len() as u64;
         let roll = stream.keyed_below(key, 1_000_000);
         let offset = 1 + stream.keyed_below(key + 1, chutes.saturating_sub(1).max(1));
-        if roll >= u64::from(self.scanner_ppm) || chutes < 2 {
+        if roll >= u64::from(ppm) || chutes < 2 {
             return correct;
         }
+        self.world.parcels.misread[i] = true;
         chute_id(usize::try_from((u64::from(correct.0) + offset) % chutes).unwrap_or(0))
     }
 
@@ -518,8 +634,13 @@ impl Sim {
         chutes.fill[c] += 1;
         chutes.incoming[c] -= 1;
         if chutes.fill[c] >= self.config.chutes.bag_capacity {
-            chutes.state[c] = ChuteState::Swapping;
             chutes.timer[c] = self.config.chutes.bag_swap_ticks;
+            // A jammed chute stays jammed; its swap starts when it clears.
+            if chutes.state[c] == ChuteState::Jammed {
+                self.faults.jam_prior[c] = ChuteState::Swapping;
+            } else {
+                chutes.state[c] = ChuteState::Swapping;
+            }
         }
         let (fill, state) = (chutes.fill[c], chutes.state[c]);
         self.world.parcels.chute[parcel.index()] = Some(chute);
@@ -532,7 +653,7 @@ impl Sim {
             chute,
         });
         let expected = self.world.parcels.destination[parcel.index()];
-        if self.world.destination_chute[expected.index()] != chute {
+        if self.world.parcels.misread[parcel.index()] {
             self.mis_sorted += 1;
             out.push(Event::ParcelMisSorted {
                 tick: t,
@@ -553,73 +674,9 @@ impl Sim {
         self.set_robot_state(t, r, RobotState::Idle, out);
     }
 
-    /// Phase 4: stations hand out work, then surplus idle robots park.
-    fn assign_work(&mut self, t: Tick, out: &mut Vec<Event>) {
-        self.idle.clear();
-        for r in self.world.robots.ids() {
-            if self.world.robots.state[r.index()] == RobotState::Idle {
-                self.idle.push(r.0);
-            }
-        }
-
-        for s in 0..self.world.stations.cell.len() {
-            let station = station_id(s);
-            while self.world.stations.inbound[s] < self.config.fleet.max_inbound_per_station {
-                let Some(&parcel) = self.world.stations.queue[s]
-                    .iter()
-                    .find(|p| self.world.parcels.robot[p.index()].is_none())
-                else {
-                    break;
-                };
-                let goal = Goal::Station(station);
-                let Some(i) = (0..self.idle.len()).min_by_key(|&i| {
-                    let r = self.idle[i];
-                    (
-                        self.distances.get(goal, self.world.robots.pos[r as usize]),
-                        r,
-                    )
-                }) else {
-                    break;
-                };
-                let r = self.idle.swap_remove(i) as usize;
-                let robot = robot_id(r);
-                self.world.stations.inbound[s] += 1;
-                self.world.parcels.robot[parcel.index()] = Some(robot);
-                self.world.robots.parcel[r] = Some(parcel);
-                self.world.robots.goal[r] = Some(goal);
-                self.world.robots.goal_since[r] = t;
-                out.push(Event::ParcelAssigned {
-                    tick: t,
-                    parcel,
-                    robot,
-                    station,
-                });
-                self.set_phase(t, parcel, Phase::AwaitingRobot, out);
-                self.set_robot_state(t, r, RobotState::ToInduction, out);
-            }
-        }
-
-        // Throttling: surplus idle robots park while spots remain.
-        let robots = &mut self.world.robots;
-        let mut parking = robots
-            .goal
-            .iter()
-            .filter(|&&g| g == Some(Goal::Park))
-            .count();
-        for r in 0..robots.len() {
-            if parking >= self.layout.parking.len() {
-                break;
-            }
-            if robots.state[r] == RobotState::Idle && robots.goal[r].is_none() {
-                robots.goal[r] = Some(Goal::Park);
-                robots.goal_since[r] = t;
-                parking += 1;
-            }
-        }
-    }
-
     /// Phases 5 and 6: plan, then apply moves and update parcel phases.
     fn plan_and_move(&mut self, t: Tick, out: &mut Vec<Event>) {
+        let mut cut = Vec::new();
         let robots = &self.world.robots;
         self.plan_goal.clear();
         self.plan_movable.clear();
@@ -638,14 +695,32 @@ impl Sim {
                 state,
                 RobotState::Idle | RobotState::ToInduction | RobotState::ToChute
             );
+            // A goal a fault has cut off: the robot waits where it is
+            // (unless pushed) instead of wandering, and records why.
+            let cut_off = movable
+                && self.faults.topology_active()
+                && goal.is_some_and(|g| self.distances.get(g, robots.pos[r]) == UNREACHABLE);
+            self.cut_by[r] = None;
+            if cut_off {
+                // Blamed below (blame needs `&mut self`).
+                cut.push(r);
+            }
             self.plan_movable.push(movable);
-            self.plan_goal.push(if movable { goal } else { None });
+            self.plan_goal
+                .push(if movable && !cut_off { goal } else { None });
             self.plan_priority.push(if at_chute {
                 0
             } else {
                 t.saturating_sub(robots.goal_since[r])
             });
         }
+        for r in cut {
+            if let Some(goal) = self.world.robots.goal[r] {
+                let pos = self.world.robots.pos[r];
+                self.cut_by[r] = Some(self.topology_blame(goal, pos, UNREACHABLE));
+            }
+        }
+        let robots = &self.world.robots;
         let input = PlanInput {
             layout: &self.layout,
             distances: &self.distances,
@@ -663,12 +738,29 @@ impl Sim {
             let from = self.world.robots.pos[r];
             let to = self.plan_out.next[r];
             self.world.robots.pos[r] = to;
+            self.detour[r] = None;
             let Some(goal) = self.plan_goal[r] else {
+                // A carried parcel whose chute is cut off is blocked (one
+                // that is waiting at the chute keeps waiting there).
+                if self.cut_by[r].is_some()
+                    && self.world.robots.state[r] == RobotState::ToChute
+                    && let Some(parcel) = self.world.robots.parcel[r]
+                    && self.world.parcels.phase[parcel.index()] != Phase::ChuteWait
+                {
+                    self.set_phase(t, parcel, Phase::Blocked, out);
+                }
                 continue;
             };
             let d_to = self.distances.get(goal, to);
             if goal != Goal::Park && d_to < self.distances.get(goal, from) {
                 self.last_progress = t;
+                // Progress on the faulted floor but not on the healthy one:
+                // the robot is going round closed cells.
+                if self.faults.topology_active()
+                    && self.healthy.get(goal, to) >= self.healthy.get(goal, from)
+                {
+                    self.detour[r] = Some(from);
+                }
             }
             if self.world.robots.state[r] == RobotState::ToChute
                 && d_to != 0
@@ -726,56 +818,6 @@ impl Sim {
                 }
                 _ => {}
             }
-        }
-    }
-
-    /// Phase 8: record every robot's direct wait cause and emit
-    /// `RobotWaited`. The planner supplies robot-to-robot causes; the sim
-    /// refines them with what it knows about stations and chutes.
-    fn attribute_waits(&mut self, t: Tick, out: &mut Vec<Event>) {
-        for r in 0..self.world.robots.len() {
-            let goal = self.world.robots.goal[r];
-            // Still at its chute (not pushed aside this tick) and unable to drop.
-            let waiting = self.at_chute[r]
-                && self.world.robots.state[r] == RobotState::ToChute
-                && self.plan_out.next[r] == self.world.robots.pos[r]
-                && goal.is_some_and(|g| self.distances.get(g, self.world.robots.pos[r]) == 0);
-            let cause = refine_cause(
-                goal,
-                self.plan_out.cause[r],
-                waiting,
-                &self.world.robots,
-                &self.world.stations,
-            );
-            // Every robot's edge is kept, so chains can be walked through
-            // idle and parked robots (`wait_for`).
-            self.waits[r] = cause;
-            let waited = &mut self.world.robots.waited[r];
-            let Some(direct) = cause else {
-                *waited = 0;
-                continue;
-            };
-            *waited = waited.saturating_add(1);
-            let waited = *waited;
-            // Events only for robots with work: idle and parking robots carry
-            // no parcel and delay nothing on their own.
-            if !matches!(goal, Some(Goal::Station(_) | Goal::Chute(_))) {
-                continue;
-            }
-            if waited == self.config.planner.watchdog_ticks {
-                out.push(Event::RobotStalled {
-                    tick: t,
-                    robot: robot_id(r),
-                    waited,
-                });
-            }
-            out.push(Event::RobotWaited {
-                tick: t,
-                robot: robot_id(r),
-                direct,
-                // CP2 walks the wait-for graph to the root.
-                root: direct,
-            });
         }
     }
 
@@ -844,31 +886,6 @@ impl Sim {
     }
 }
 
-/// Refine a planner's robot-to-robot cause with what only the sim knows
-/// (ARCHITECTURE §4): a robot waiting at a chute that cannot take its parcel
-/// waits on the chute; a robot blocked by the robot *loading* on its target
-/// station's cell waits on the station. A robot stuck on that cell after
-/// loading is just another robot: the edge stays `BlockedBy`, so the walk
-/// continues to whatever blocks it.
-fn refine_cause(
-    goal: Option<Goal>,
-    planner: Option<WaitCause>,
-    waiting_at_chute: bool,
-    robots: &Robots,
-    stations: &Stations,
-) -> Option<WaitCause> {
-    match (goal, planner) {
-        (Some(Goal::Chute(c)), _) if waiting_at_chute => Some(WaitCause::ChuteUnavailable(c)),
-        (Some(Goal::Station(s)), Some(WaitCause::BlockedBy(b)))
-            if robots.pos[b.index()] == stations.cell[s.index()]
-                && robots.state[b.index()] == RobotState::Loading =>
-        {
-            Some(WaitCause::StationBusy(s))
-        }
-        (_, cause) => cause,
-    }
-}
-
 fn robot_id(r: usize) -> RobotId {
     // Robot counts come from a u32 config field.
     #[allow(clippy::cast_possible_truncation)]
@@ -889,7 +906,7 @@ fn chute_id(c: usize) -> ChuteId {
 
 /// Debug-build check of the planner contract (see [`crate::planner`]).
 #[cfg(debug_assertions)]
-fn check_plan(layout: &Layout, pos: &[crate::grid::CellIdx], next: &[crate::grid::CellIdx]) {
+fn check_plan(layout: &Layout, pos: &[CellIdx], next: &[CellIdx]) {
     let mut seen = vec![u32::MAX; layout.grid.len()];
     for (r, (&a, &b)) in pos.iter().zip(next).enumerate() {
         assert!(
@@ -920,58 +937,5 @@ fn check_plan(layout: &Layout, pos: &[crate::grid::CellIdx], next: &[crate::grid
                 "robots {r} and {other} swapped cells"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Robot 1 stands on station 0's cell (cell 7); robot 0 heads there.
-    fn floor(blocker: RobotState) -> (Robots, Stations) {
-        let robots = Robots {
-            pos: vec![8, 7],
-            state: vec![RobotState::ToInduction, blocker],
-            ..Robots::default()
-        };
-        let stations = Stations {
-            cell: vec![7],
-            ..Stations::default()
-        };
-        (robots, stations)
-    }
-
-    #[test]
-    fn station_busy_only_while_the_blocker_is_loading() {
-        let goal = Some(Goal::Station(StationId(0)));
-        let blocked = Some(WaitCause::BlockedBy(RobotId(1)));
-        let (robots, stations) = floor(RobotState::Loading);
-        assert_eq!(
-            refine_cause(goal, blocked, false, &robots, &stations),
-            Some(WaitCause::StationBusy(StationId(0)))
-        );
-        // Loaded and itself stuck on the station cell: the real blocker is
-        // further down the chain, so keep the robot edge.
-        let (robots, stations) = floor(RobotState::ToChute);
-        assert_eq!(
-            refine_cause(goal, blocked, false, &robots, &stations),
-            blocked
-        );
-    }
-
-    #[test]
-    fn waiting_at_an_unavailable_chute_is_chute_unavailable() {
-        let (robots, stations) = floor(RobotState::Loading);
-        let goal = Some(Goal::Chute(ChuteId(3)));
-        assert_eq!(
-            refine_cause(goal, None, true, &robots, &stations),
-            Some(WaitCause::ChuteUnavailable(ChuteId(3)))
-        );
-        // Pushed off the chute while waiting: the robot edge is the cause.
-        let yielded = Some(WaitCause::Yielded(RobotId(1)));
-        assert_eq!(
-            refine_cause(goal, yielded, false, &robots, &stations),
-            yielded
-        );
     }
 }

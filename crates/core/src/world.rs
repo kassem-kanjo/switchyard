@@ -27,7 +27,8 @@ pub enum RobotState {
     ToChute = 3,
     /// Beside the chute, tipping the parcel in.
     Dropping = 4,
-    /// Broken down (fault injection, CP2).
+    /// Broken down by a `robot-failure` fault: it holds its cell (and any
+    /// parcel) until repaired, then resumes its previous state.
     Failed = 5,
 }
 
@@ -113,9 +114,14 @@ pub struct Parcels {
     /// Station where the parcel was inducted.
     pub station: Vec<StationId>,
     /// Arrival order of the parcel at its station (0 for the station's
-    /// first parcel). Random draws for a parcel are keyed on
-    /// `(station, ordinal)`, so they never depend on other parcels.
+    /// first parcel). For a volume-surge parcel, its order among that
+    /// surge's parcels at the station.
     pub ordinal: Vec<u32>,
+    /// Key of the parcel's random draws (destination, scanner), taken from
+    /// its station's streams at this key: the ordinal for regular arrivals,
+    /// a key in the surge's own range for surge arrivals. A parcel's draws
+    /// therefore never depend on other parcels or on other faults.
+    pub key: Vec<u64>,
     /// Sort destination.
     pub destination: Vec<DestinationId>,
     /// Tick of arrival at the station.
@@ -130,6 +136,10 @@ pub struct Parcels {
     pub target: Vec<Option<ChuteId>>,
     /// Chute it was dropped into, once dropped.
     pub chute: Vec<Option<ChuteId>>,
+    /// True if the scanner misread the parcel (it goes to a wrong chute and
+    /// is reported as `ParcelMisSorted`). A chute remapped after the scan
+    /// does not make a correctly scanned parcel mis-sorted.
+    pub misread: Vec<bool>,
 }
 
 impl Parcels {
@@ -153,7 +163,7 @@ pub struct Chutes {
     pub cell: Vec<CellIdx>,
     /// Parcels in the bag.
     pub fill: Vec<u32>,
-    /// Open or swapping.
+    /// Open, swapping or jammed.
     pub state: Vec<ChuteState>,
     /// Ticks left in a bag swap.
     pub timer: Vec<u32>,
@@ -171,7 +181,8 @@ pub struct Stations {
     pub queue: Vec<VecDeque<ParcelId>>,
     /// Robots assigned to this station and not yet finished loading.
     pub inbound: Vec<u16>,
-    /// Parcels that have arrived at this station so far.
+    /// Regular (non-surge) parcels that have arrived at this station so far:
+    /// the next regular parcel's ordinal.
     pub arrived: Vec<u32>,
 }
 

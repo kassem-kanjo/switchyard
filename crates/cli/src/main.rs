@@ -3,6 +3,9 @@
 //! The CLI owns all I/O (reading scenario files, printing results), which
 //! keeps the core pure (ADR 0002).
 
+mod chaos;
+mod export;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -36,6 +39,11 @@ enum Command {
         #[arg(long)]
         seed: Option<u64>,
     },
+    /// Inject faults and score the floor's resilience against its
+    /// fault-free twin, over one or more seeds.
+    Chaos(chaos::ChaosArgs),
+    /// Export per-parcel traces (Perfetto, OTLP JSON or JSONL).
+    Export(export::ExportArgs),
 }
 
 fn main() -> ExitCode {
@@ -46,6 +54,14 @@ fn main() -> ExitCode {
             ticks,
             seed,
         } => match run(&scenario, ticks, seed) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Chaos(args) => chaos::main(&args),
+        Command::Export(args) => match export::run_export(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -95,9 +111,11 @@ fn run(path: &PathBuf, ticks: u32, seed: Option<u64>) -> Result<(), String> {
         for e in &events {
             match e {
                 Event::RobotWaited { direct, .. } => match direct {
-                    WaitCause::BlockedBy(_) => waits.blocked += 1,
+                    // `Cycle` is only ever a root, never a direct cause.
+                    WaitCause::BlockedBy(_) | WaitCause::Cycle(_) => waits.blocked += 1,
                     WaitCause::Yielded(_) => waits.yielded += 1,
-                    WaitCause::CellBlocked(_) => waits.cell += 1,
+                    // A failed robot waiting on its own fault.
+                    WaitCause::CellBlocked(_) | WaitCause::Fault(_) => waits.cell += 1,
                     WaitCause::ChuteUnavailable(_) => waits.chute += 1,
                     WaitCause::StationBusy(_) => waits.station += 1,
                 },
@@ -136,7 +154,7 @@ fn run(path: &PathBuf, ticks: u32, seed: Option<u64>) -> Result<(), String> {
     );
     println!("mis-sorted    {}", stats.mis_sorted);
     println!(
-        "robot waits   blocked {}, yielded {}, cell blocked {}, chute unavailable {}, station busy {} (robot-ticks)",
+        "robot waits   blocked {}, yielded {}, fault or cell blocked {}, chute unavailable {}, station busy {} (robot-ticks)",
         waits.blocked, waits.yielded, waits.cell, waits.chute, waits.station
     );
     println!("stalls        floor {stalls}, robot {robot_stalls}");

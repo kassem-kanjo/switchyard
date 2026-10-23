@@ -4,6 +4,22 @@ import { legendEntries, activeParked } from "./legend";
 import { theme } from "./theme";
 import { parsePreset } from "./preset";
 import { WasmSource } from "./sim/wasmSource";
+import "./ui/app.css";
+import { applyThemeVars } from "./theme";
+import { createMockServices } from "./data/mock";
+import { createWasmServices } from "./data/wasmServices";
+import type { Services } from "./data/types";
+import { ChartView } from "./ui/ChartView";
+import { TracePanel } from "./ui/TracePanel";
+import { FaultPanel } from "./ui/FaultPanel";
+import { PostmortemPanel } from "./ui/PostmortemPanel";
+import { mountTabs } from "./ui/tabs";
+import { pickRobot } from "./ui/pick";
+import { fitToCanvas } from "./renderer/fit";
+import { RobotState } from "./renderer/Renderer";
+import { h } from "./ui/dom";
+
+applyThemeVars();
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const playBtn = document.getElementById("play") as HTMLButtonElement;
@@ -16,18 +32,23 @@ const legendEl = document.getElementById("legend") as HTMLDivElement;
 const preset = parsePreset(window.location.search);
 const badgeEl = document.getElementById("badge") as HTMLSpanElement;
 
-async function openSource(): Promise<SimSource> {
+/** Latest sim tick, read by the mock services and the fault panel. */
+let nowTick = 0;
+
+/** The real sim and services, or, if the WASM cannot load, mock ones behind the visible badge. */
+async function openSource(): Promise<{ source: SimSource; services: Services }> {
   try {
-    return await WasmSource.create(preset);
+    const source = await WasmSource.create(preset);
+    return { source, services: createWasmServices(source.client) };
   } catch (err) {
     console.warn("WASM sim unavailable, falling back to mock data:", err);
     badgeEl.hidden = false;
-    return new MockSource();
+    return { source: new MockSource(), services: createMockServices(() => nowTick) };
   }
 }
 
 async function main(): Promise<void> {
-  const source = await openSource();
+  const { source, services } = await openSource();
   presetSel.value = preset;
   presetSel.addEventListener("change", () => {
     const url = new URL(window.location.href);
@@ -50,7 +71,53 @@ async function main(): Promise<void> {
     legendEl.append(item);
   }
   const renderer = new Canvas2DRenderer();
-  renderer.init(canvas, source.layout());
+  const layout = source.layout();
+  renderer.init(canvas, layout);
+
+  // Sidebar. Data providers come from the same worker as the floor.
+  const chart = new ChartView(document.getElementById("chart") as HTMLCanvasElement);
+  const panels = { trace: h("div"), faults: h("div"), postmortem: h("div") };
+  document.getElementById("side")!.append(panels.trace, panels.faults, panels.postmortem);
+  const tabs = mountTabs(
+    document.getElementById("tabbar")!,
+    [
+      { id: "trace", label: "Trace" },
+      { id: "faults", label: "Faults" },
+      { id: "postmortem", label: "Post-mortem" },
+    ],
+    panels,
+  );
+  const tracePanel = new TracePanel(panels.trace, services.traces);
+  const faultPanel = new FaultPanel(panels.faults, services.faults, () => nowTick);
+  new PostmortemPanel(panels.postmortem, services.postmortem);
+  const refreshSide = () => {
+    chart.update(services.metrics.series());
+    void faultPanel.refresh();
+  };
+  refreshSide();
+  setInterval(refreshSide, 1000);
+
+  // Click a robot to see its parcel's trace. A failed robot may still hold its parcel (stuck on it until repair).
+  const carrying: readonly number[] = [RobotState.ToChute, RobotState.Dropping, RobotState.Failed];
+  canvas.addEventListener("click", (e) => {
+    const r = canvas.getBoundingClientRect();
+    const fit = fitToCanvas(layout.width, layout.height, canvas.clientWidth, canvas.clientHeight, theme.padding);
+    const snap = source.snapshot();
+    const id = pickRobot(snap, fit, e.clientX - r.left, e.clientY - r.top, null);
+    if (id === null) {
+      renderer.highlight([]);
+      return;
+    }
+    tabs.select("trace");
+    renderer.highlight([id]);
+    if (!carrying.includes(snap.robotState[id]!)) {
+      tracePanel.message(`R${id} is not carrying a parcel. Click a robot that is.`);
+      return;
+    }
+    void services.traces
+      .parcelOfRobot(id)
+      .then((p) => (p === null ? tracePanel.message(`R${id} has no parcel.`) : tracePanel.showParcel(p)));
+  });
 
   let playing = true;
   playBtn.addEventListener("click", () => {
@@ -75,6 +142,8 @@ async function main(): Promise<void> {
       }
     }
     const snap = source.snapshot();
+    nowTick = snap.tick;
+    faultPanel.tickBars();
     renderer.draw(snap);
     tickEl.textContent = `tick ${snap.tick}`;
     const fl = activeParked(snap.robotState);

@@ -72,13 +72,24 @@ pub struct PlanOutput {
 }
 
 /// A multi-robot motion planner. See the module docs for the contract.
-pub trait Planner: Send + fmt::Debug {
+pub trait Planner: Send + Sync + fmt::Debug {
     /// Plan one tick. `out` is overwritten.
     fn plan(&mut self, input: &PlanInput<'_>, out: &mut PlanOutput);
 
     /// Feed any planner state that affects future decisions into the state
     /// hash, so the hash covers the whole sim (ADR 0002 §5).
     fn hash_state(&self, h: &mut Fnv1a);
+
+    /// A boxed copy of the planner with the same state, so a whole
+    /// [`crate::sim::Sim`] can be cloned for checkpoints and counterfactual
+    /// replays (ADR 0005). `Box::new(self.clone())` for a `Clone` planner.
+    fn box_clone(&self) -> Box<dyn Planner>;
+}
+
+impl Clone for Box<dyn Planner> {
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
 }
 
 /// May a robot with `goal` stand on `cell`? Open floor, or the induction
