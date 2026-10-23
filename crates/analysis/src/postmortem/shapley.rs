@@ -265,11 +265,11 @@ impl Attribution {
     /// Verdict for the mask `s`. The full set `N` recovers all of `v(N)` by
     /// definition, so it is always `Yes`: the noise band cannot make "remove
     /// every cause" insufficient to explain the loss it is defined as.
-    fn verdict_of_mask(&self, s: usize, tau_pct: i64, band: f64) -> Verdict {
+    fn verdict_of_mask(&self, s: usize, tau_pct: i64, bands: &[f64]) -> Verdict {
         if s == self.all() {
             Verdict::Yes
         } else {
-            self.verdict(self.v[s], tau_pct, band)
+            self.verdict(self.v[s], tau_pct, bands[s])
         }
     }
 
@@ -279,6 +279,16 @@ impl Attribution {
     /// if `v(N) <= 0`.
     #[must_use]
     pub fn minimal_sufficient_within(&self, tau_pct: i64, band: f64) -> MinimalSets {
+        self.minimal_sufficient_banded(tau_pct, &vec![band; self.v.len()])
+    }
+
+    /// [`Self::minimal_sufficient_within`] with a band per mask (`bands[s]`
+    /// is the noise of `v(s)`, see [`mask_bands`]; #18).
+    ///
+    /// # Panics
+    /// If `bands` has fewer entries than there are masks.
+    #[must_use]
+    pub fn minimal_sufficient_banded(&self, tau_pct: i64, bands: &[f64]) -> MinimalSets {
         if self.total() <= 0 {
             return MinimalSets::default();
         }
@@ -290,7 +300,7 @@ impl Attribution {
             let (mut yes, mut noise) = (Vec::new(), Vec::new());
             for s in 1..=self.all() {
                 if s.count_ones() as usize == k {
-                    match self.verdict_of_mask(s, tau_pct, band) {
+                    match self.verdict_of_mask(s, tau_pct, bands) {
                         Verdict::Yes => yes.push(s),
                         Verdict::WithinNoise => noise.push(s),
                         Verdict::No => {}
@@ -326,13 +336,22 @@ impl Attribution {
     /// `v(N) <= 0`.
     #[must_use]
     pub fn contingency_within(&self, i: usize, tau_pct: i64, band: f64) -> Contingency {
+        self.contingency_banded(i, tau_pct, &vec![band; self.v.len()])
+    }
+
+    /// [`Self::contingency_within`] with a band per mask (#18).
+    ///
+    /// # Panics
+    /// If `bands` has fewer entries than there are masks.
+    #[must_use]
+    pub fn contingency_banded(&self, i: usize, tau_pct: i64, bands: &[f64]) -> Contingency {
         if self.total() <= 0 {
             return Contingency {
                 sure: None,
                 possible: None,
             };
         }
-        let verdict = |s: usize| self.verdict_of_mask(s, tau_pct, band);
+        let verdict = |s: usize| self.verdict_of_mask(s, tau_pct, bands);
         let bit = 1 << i;
         // Sure pivot: without `i` the contingency is a definite No and with
         // `i` a definite Yes.
@@ -353,6 +372,25 @@ impl Attribution {
             .min();
         Contingency { sure, possible }
     }
+}
+
+/// Half the replay-noise band of every lattice value, per mask.
+///
+/// `per_history[h][mask]` is the value `v(mask)` replayed on history `h`.
+/// Each mask has its own replay noise: the dither histories diverge the
+/// planner, so `v(S)` varies from history to history independently of
+/// `v(∅)`. A mask's verdict must therefore be judged with its own band, not
+/// the loss band (#18): the loss band describes the empty mask's delay, not
+/// the value whose threshold is being tested.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn mask_bands(per_history: &[Vec<i64>]) -> Vec<f64> {
+    let Some(first) = per_history.first() else {
+        return Vec::new();
+    };
+    (0..first.len())
+        .map(|mask| super::band(per_history.iter().map(|v| v[mask] as f64)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -509,6 +547,31 @@ mod tests {
     }
 
     #[test]
+    fn each_mask_is_judged_against_its_own_band() {
+        // Game [0, 88, 60, 100], tau 90: mask 1 (88) is the only near miss.
+        // A uniform band of 3 puts it within noise; a quiet mask 1 (band 0)
+        // makes it a clear No, a noisy one (band 3) keeps it a near miss, and
+        // a big band on mask 2 makes that mask the near miss instead.
+        let a = Attribution::new(&[0, 88, 60, 100]);
+        assert_eq!(
+            a.minimal_sufficient_banded(90, &[0.0, 3.0, 0.0, 0.0]).near,
+            vec![1]
+        );
+        assert_eq!(
+            a.minimal_sufficient_banded(90, &[0.0, 0.0, 50.0, 0.0]).near,
+            vec![2]
+        );
+        assert_eq!(
+            a.minimal_sufficient_banded(90, &[3.0; 4]),
+            a.minimal_sufficient_within(90, 3.0)
+        );
+        assert_eq!(
+            a.contingency_banded(0, 90, &[3.0; 4]),
+            a.contingency_within(0, 90, 3.0)
+        );
+    }
+
+    #[test]
     fn contingency_flags_noise() {
         // Game [0, 88, 60, 100], tau 90, band 3, cause 0 (bit 1). Hand
         // derivation over the contingencies t without bit 0:
@@ -525,6 +588,28 @@ mod tests {
                 possible: Some(0),
             }
         );
+    }
+
+    #[test]
+    fn mask_bands_use_each_masks_own_spread() {
+        let bands = mask_bands(&[vec![0, 10, 20, 30], vec![0, 14, 20, 26]]);
+        assert_eq!(bands, vec![0.0, 2.0, 0.0, 2.0]);
+    }
+
+    #[test]
+    fn a_single_history_has_zero_band() {
+        assert_eq!(mask_bands(&[vec![0, 10, 20, 30]]), vec![0.0; 4]);
+    }
+
+    #[test]
+    fn no_histories_means_no_bands() {
+        assert!(mask_bands(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_negative_value_widens_its_band() {
+        let bands = mask_bands(&[vec![0, -4], vec![0, 6], vec![0, 2]]);
+        assert_eq!(bands, vec![0.0, 5.0]);
     }
 
     proptest! {

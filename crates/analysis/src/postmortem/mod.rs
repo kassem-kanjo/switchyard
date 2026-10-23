@@ -307,6 +307,22 @@ impl PostMortem {
         self.widen(band(self.per_history.iter().map(|a| a.shapley(i))))
     }
 
+    /// Noise band of every lattice value (index = mask), from the dither
+    /// histories, widened like the others when the dither is thin (#18).
+    /// Mask 0 is the history itself: its band is [`Self::loss_band`].
+    #[must_use]
+    pub fn mask_bands(&self) -> Vec<f64> {
+        let games: Vec<Vec<i64>> = self.per_history.iter().map(|a| a.v.clone()).collect();
+        let mut bands: Vec<f64> = shapley::mask_bands(&games)
+            .into_iter()
+            .map(|b| self.widen(b))
+            .collect();
+        if bands.is_empty() {
+            bands = vec![self.loss_band(); self.masks().len()];
+        }
+        bands
+    }
+
     /// Half the range of the actual history's delay across histories.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]

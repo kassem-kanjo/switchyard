@@ -103,6 +103,7 @@ pub fn render(pm_: &PostMortem) -> String {
     let loss = pm_.loss();
     let real_loss = pm_.real_loss();
     let loss_band = pm_.loss_band();
+    let mask_bands = pm_.mask_bands();
     let total = att.total();
     let all = att.all();
     let floor = (loss / 20).max(10 * i64::from(TICKS_PER_MINUTE));
@@ -318,7 +319,7 @@ pub fn render(pm_: &PostMortem) -> String {
                 let prev = order[rank - 1];
                 !significant(att.shapley(prev) - phi, band_i.max(pm_.share_band(prev)))
             };
-            let c = att.contingency_within(i, pm_.options.tau_pct, loss_band);
+            let c = att.contingency_banded(i, pm_.options.tau_pct, &mask_bands);
             let resp = if c.sure == c.possible {
                 resp_text(c.sure)
             } else {
@@ -401,7 +402,7 @@ pub fn render(pm_: &PostMortem) -> String {
                 r((1 << i) | (1 << j))
             );
         }
-        let sets = att.minimal_sufficient_within(pm_.options.tau_pct, loss_band);
+        let sets = att.minimal_sufficient_banded(pm_.options.tau_pct, &mask_bands);
         let set_names = |masks: &[usize]| -> String {
             masks
                 .iter()
@@ -418,9 +419,8 @@ pub fn render(pm_: &PostMortem) -> String {
         if !sets.sure.is_empty() {
             let _ = writeln!(
                 o,
-                "\nSmallest set of causes whose removal recovers at least {} % of the recoverable loss (judged against the ± {} parcel-min noise): {}.",
+                "\nSmallest set of causes whose removal recovers at least {} % of the recoverable loss (each judged against its own replay noise): {}.",
                 pm_.options.tau_pct,
-                pminf(loss_band),
                 set_names(&sets.sure)
             );
         }

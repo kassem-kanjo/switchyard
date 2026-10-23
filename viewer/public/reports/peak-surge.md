@@ -33,7 +33,7 @@ Shapley values and shares are computed from every replay [R0–R1]; *Alone* and 
 
 Interactions: none beyond the noise; the causes add up independently.
 
-Smallest set of causes whose removal recovers at least 90 % of the recoverable loss (judged against the ± 303 parcel-min noise): {F0} [R1].
+Smallest set of causes whose removal recovers at least 90 % of the recoverable loss (each judged against its own replay noise): {F0} [R1].
 
 ## Capacity hotspots (a different question)
 
