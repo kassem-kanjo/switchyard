@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.88"  # let-chains
 license = "MIT"
@@ -17,9 +17,9 @@ authors = ["Kassem Kanjo"]
 repository = "https://github.com/kassem-kanjo/switchyard"
 
 [workspace.dependencies]
-switchyard-core = { path = "crates/core", version = "0.1.0" }
-switchyard-trace = { path = "crates/trace", version = "0.1.0" }
-switchyard-analysis = { path = "crates/analysis", version = "0.1.0" }
+switchyard-core = { path = "crates/core", version = "1.0.0" }
+switchyard-trace = { path = "crates/trace", version = "1.0.0" }
+switchyard-analysis = { path = "crates/analysis", version = "1.0.0" }
 
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
