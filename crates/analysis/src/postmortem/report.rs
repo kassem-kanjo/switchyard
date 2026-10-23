@@ -198,10 +198,22 @@ pub fn render(pm_: &PostMortem) -> String {
             })
             .collect();
         let _ = write!(o, "{}", cause_sentence(&parts, &lattice));
+        // Shares divide the median game, so the remainder is of the median
+        // loss; name it when it is not the headline figure, or the reader
+        // adds the numbers up and gets a contradiction.
         let unexplained = loss - total;
+        let of_median = if loss == real_loss {
+            String::new()
+        } else {
+            format!(
+                " of the {} parcel-min median loss across the {histories} histories (the figure \
+                 the shares divide)",
+                pmin(loss)
+            )
+        };
         let _ = writeln!(
             o,
-            " {} parcel-min ({}) is not explained by removing these causes [{}].",
+            " {} parcel-min ({}){of_median} is not explained by removing these causes [{}].",
             pmin(unexplained),
             if loss > 0 {
                 format!("{:.0} %", 100.0 * unexplained as f64 / loss as f64)
@@ -244,10 +256,22 @@ pub fn render(pm_: &PostMortem) -> String {
         pmin(real_loss),
         pminf(loss_band)
     );
+    // Two late counts, each labelled with its own cut-off: the headline's is
+    // at the horizon; the scorecard's covers the whole run, which can go on
+    // past the horizon and so count more parcels.
     let _ = writeln!(
         o,
-        "| Parcels more than {} min late (whole run) | {} | [A, T] |",
-        pm_.options.sla_extra_minutes, s.delay.late_parcels
+        "| Parcels more than {} min late at {} | {} | [R0] |",
+        pm_.options.sla_extra_minutes,
+        clock(pm_.horizon),
+        pm_.real_late()
+    );
+    let _ = writeln!(
+        o,
+        "| Parcels more than {} min late (whole run, to {}) | {} | [A, T] |",
+        pm_.options.sla_extra_minutes,
+        clock(pm_.ticks),
+        s.delay.late_parcels
     );
     let _ = writeln!(
         o,
@@ -600,7 +624,8 @@ pub fn render(pm_: &PostMortem) -> String {
     let _ = writeln!(
         o,
         "- **Noise.** Robot paths diverge after any small change, so every replay ran on \
-         {histories} {}: the real one{}. Values are medians across histories; ± is half their \
+         {histories} {}: the real one{}. The headline delay and late count are the real \
+         history's; every other value is the median across histories; ± is half their \
          range{}. Two values that differ by less than twice that band are reported as a tie.",
         plural(histories, "history", "histories"),
         if robots.is_empty() {
@@ -876,6 +901,41 @@ mod tests {
             "Impact delay disagrees with the headline: {md}"
         );
         assert!(!md.contains(&format!("cost **{} parcel-minutes**", pmin(pm.loss()))));
+        // The late count at the horizon in Impact is the headline's, and the
+        // whole-run scorecard count says where it stops.
+        assert!(
+            md.contains(&format!("late at {} | 7 | [R0] |", clock(pm.horizon))),
+            "{md}"
+        );
+        assert!(
+            md.contains(&format!("(whole run, to {})", clock(pm.ticks))),
+            "{md}"
+        );
+    }
+
+    /// Review of #20: the unexplained remainder is `median loss - v(N)`. When
+    /// the headline states the (different) real-history loss, the remainder
+    /// names the median it is part of, so the numbers never silently disagree.
+    #[test]
+    fn the_unexplained_remainder_names_the_median_it_is_part_of() {
+        let mut pm = small_incident();
+        pm.dither = vec![RobotId(1), RobotId(2)];
+        let median = pm.loss();
+        let tpm = i64::from(TICKS_PER_MINUTE);
+        // Real history 100 parcel-min above the median, so it stays attributable.
+        pm.replays[0].delay = vec![median + 100 * tpm, median, median - 50 * tpm];
+        assert_eq!(pm.loss(), median);
+        let md = render(&pm);
+        assert!(
+            md.contains(&format!(
+                "of the {} parcel-min median loss across the 3 histories (the figure the shares divide) is not explained",
+                pmin(median)
+            )),
+            "{md}"
+        );
+        // Same real and median loss: no extra clause.
+        pm.replays[0].delay = vec![median, median, median];
+        assert!(!render(&pm).contains("median loss across"));
     }
 
     /// #21(a): the header names the horizon actually used, which is clamped

@@ -18,7 +18,8 @@ Best fix: **send chute C0's destination to C1 from the jam on (never undone)** w
 | Measure | Value | Source |
 |---|---|---|
 | Delay at 00:37 vs the fault-free twin | 837 parcel-min (± 42) | [R0] |
-| Parcels more than 10 min late (whole run) | 23 | [A, T] |
+| Parcels more than 10 min late at 00:37 | 23 | [R0] |
+| Parcels more than 10 min late (whole run, to 00:50) | 23 | [A, T] |
 | Peak backlog | 115 parcels (twin 30) | [A, T] |
 | Worst minute / time to recover | 62 % below the twin / 14 min | [A, T] |
 | Stations / chutes out of action at once | 0 / 1 | [A] |
@@ -84,7 +85,7 @@ Each fix was applied to the real shift at the time shown and replayed to 00:37.
 ## Method and confidence
 
 - **Counterfactual replay.** The shift was re-run with each combination of causes removed, resuming from the last 5-minute checkpoint before the earliest removed cause, and scored at 00:37 as net parcel-minutes of delay against the fault-free twin (same seed, same parcels). Shapley values are exact over all subsets, in integer arithmetic, so the shares add up exactly to the recovered loss.
-- **Noise.** Robot paths diverge after any small change, so every replay ran on 1 history: the real one (no dithered copy diverged: 0 of 3 tried). Values are medians across histories; ± is half their range, widened to at least 5 % of the loss because fewer than 5 histories diverged. Two values that differ by less than twice that band are reported as a tie.
+- **Noise.** Robot paths diverge after any small change, so every replay ran on 1 history: the real one (no dithered copy diverged: 0 of 3 tried). The headline delay and late count are the real history's; every other value is the median across histories; ± is half their range, widened to at least 5 % of the loss because fewer than 5 histories diverged. Two values that differ by less than twice that band are reported as a tie.
 - **Detection** uses the twin's Poisson noise as the scale. h = 3 is 3.0 times the largest CUSUM value (1.0) seen in 160 simulated hours of fault-free runs whose robot paths were perturbed.
 
 ## Appendix: replay index
