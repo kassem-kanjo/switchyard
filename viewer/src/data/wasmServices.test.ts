@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createMockServices } from "./mock";
 import fixture from "./fixtures/wasm-shapes.json";
 import { createWasmServices, type RpcClient } from "./wasmServices";
 import { WorkerClient, type WorkerLike } from "../sim/client";
@@ -88,6 +89,48 @@ describe("createWasmServices", () => {
     expect(await s.traces.getTrace(5)).toBeNull();
     expect(await s.traces.getTrace(-1)).toBeNull();
     expect(await s.traces.getTrace(1.5)).toBeNull();
+  });
+
+  const reply = (ok: boolean, body: string) => ({ ok, text: () => Promise.resolve(body) });
+
+  it("precomputed returns the report when ok and it starts with a markdown H1", async () => {
+    const urls: string[] = [];
+    const s = createWasmServices(fakeRpc({}), (url) => {
+      urls.push(url);
+      return Promise.resolve(reply(true, "# Two dead robots and a jam\n\nbody"));
+    });
+    expect(await s.postmortem.precomputed("two-dead-robots-and-a-jam")).toBe("# Two dead robots and a jam\n\nbody");
+    expect(urls).toEqual(["reports/two-dead-robots-and-a-jam.md"]);
+  });
+
+  it("precomputed returns null when the response is not ok", async () => {
+    const s = createWasmServices(fakeRpc({}), () => Promise.resolve(reply(false, "# Report")));
+    expect(await s.postmortem.precomputed("a-preset")).toBeNull();
+  });
+
+  it("precomputed returns null for an HTML body (dev server fallback)", async () => {
+    const s = createWasmServices(fakeRpc({}), () => Promise.resolve(reply(true, "<!doctype html><html>")));
+    expect(await s.postmortem.precomputed("a-preset")).toBeNull();
+  });
+
+  it("precomputed returns null when fetch rejects", async () => {
+    const s = createWasmServices(fakeRpc({}), () => Promise.reject(new Error("offline")));
+    expect(await s.postmortem.precomputed("a-preset")).toBeNull();
+  });
+
+  it("precomputed never builds a URL from an odd preset and returns null", async () => {
+    const calls: string[] = [];
+    const s = createWasmServices(fakeRpc({}), (url) => {
+      calls.push(url);
+      return Promise.resolve(reply(true, "# x"));
+    });
+    expect(await s.postmortem.precomputed("../x")).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("mock postmortem has no precomputed report", async () => {
+    const svc = createMockServices(() => 0);
+    expect(await svc.postmortem.precomputed("two-dead-robots-and-a-jam")).toBeNull();
   });
 });
 
