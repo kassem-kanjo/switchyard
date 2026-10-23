@@ -259,7 +259,22 @@ impl PostMortem {
         }
     }
 
-    /// Median delay of the actual shift at the horizon (parcel-ticks).
+    /// Delay of the real history at the horizon (parcel-ticks): the fact the
+    /// report states. Medians are for attribution only (#20); the dither
+    /// copies give the +- around this number, never the number itself.
+    #[must_use]
+    pub fn real_loss(&self) -> i64 {
+        self.masks()[0].delay.first().copied().unwrap_or(0)
+    }
+
+    /// Parcels late at the horizon on the real history.
+    #[must_use]
+    pub fn real_late(&self) -> u32 {
+        self.masks()[0].late.first().copied().unwrap_or(0)
+    }
+
+    /// Median delay of the actual shift at the horizon (parcel-ticks): the
+    /// size of the game the Shapley values divide, not a headline figure.
     #[must_use]
     pub fn loss(&self) -> i64 {
         self.masks()[0].median_delay()
@@ -561,7 +576,7 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
 
     // 3. Candidates, fixes, hotspots.
     let (candidates, dropped) = if incident.is_some() {
-        candidates::candidates(&actual_cfg, window_end, &blame)
+        candidates::candidates(&actual_cfg, window_start, window_end, &blame)
     } else {
         (Vec::new(), Vec::new())
     };

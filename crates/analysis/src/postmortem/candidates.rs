@@ -2,7 +2,9 @@
 //! candidate fixes (ADR 0006 §3 and §5).
 //!
 //! - **Candidates** are causes to *remove*: every enabled fault that
-//!   started before the incident window closed. Beyond [`MAX_CANDIDATES`],
+//!   started before the incident window closed and had not already ended
+//!   before it opened (a fault that was over cannot have caused it, #21).
+//!   Beyond [`MAX_CANDIDATES`],
 //!   the ones with the most fault blame (parcel-ticks of `ParcelDelayed`
 //!   rooted at the fault) are kept.
 //! - **Hotspots** are capacity limits the floor hit without any fault
@@ -105,18 +107,20 @@ impl Blame {
     }
 }
 
-/// Enabled faults of `cfg` that started before `window_end` (a tick), the
-/// most blamed first if there are more than [`MAX_CANDIDATES`]; returned in
-/// fault-id order, plus the ones left out.
+/// Enabled faults of `cfg` that started before `window_end` and were still
+/// active at or after `window_start` (ticks), the most blamed first if there
+/// are more than [`MAX_CANDIDATES`]; returned in fault-id order, plus the
+/// ones left out.
 #[must_use]
 pub fn candidates(
     cfg: &ScenarioConfig,
+    window_start: Tick,
     window_end: Tick,
     blame: &Blame,
 ) -> (Vec<Candidate>, Vec<Candidate>) {
     let mut all: Vec<Candidate> = cfg
         .enabled_faults()
-        .filter(|(_, f)| f.at < window_end)
+        .filter(|(_, f)| f.at < window_end && f.end() > window_start)
         .map(|(id, f)| Candidate {
             fault: id,
             spec: f.clone(),
@@ -206,7 +210,7 @@ pub fn fixes_and_hotspots(
         {
             fixes.push(Fix {
                 label: format!(
-                    "send chute {chute}'s {} to {to} while it is jammed",
+                    "send chute {chute}'s {} to {to} from the jam on (never undone)",
                     if remaps.len() == 1 {
                         "destination".to_owned()
                     } else {
@@ -325,13 +329,32 @@ mod tests {
         for (f, b) in [(0, 5), (1, 50), (2, 40), (3, 30), (4, 20), (5, 10), (6, 1)] {
             blame.fault.insert(FaultId(f), b);
         }
-        let (kept, dropped) = candidates(&cfg, 1_000, &blame);
+        let (kept, dropped) = candidates(&cfg, 0, 1_000, &blame);
         let ids: Vec<u32> = kept.iter().map(|c| c.fault.0).collect();
         // F7 is disabled, F8 starts after the window; F6 (blame 1) is the
         // least blamed of seven.
         assert_eq!(ids, vec![0, 1, 2, 3, 4, 5]);
         assert_eq!(dropped.len(), 1);
         assert_eq!(dropped[0].fault, FaultId(6));
+    }
+
+    /// #21(c): a fault that ended before the window opened cannot have caused
+    /// the incident (edge-two-incidents: a 2-min jam 40 min earlier).
+    #[test]
+    fn a_fault_over_before_the_window_opened_is_not_a_candidate() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        // F0 is over at 600; F1 is still active at 1_000 (600..1_200); F2
+        // ends exactly when the window opens (end() is the first inactive tick).
+        cfg.faults
+            .push(fault(0, FaultKind::ChuteJam { chute: ChuteId(1) }));
+        cfg.faults
+            .push(fault(600, FaultKind::ChuteJam { chute: ChuteId(1) }));
+        cfg.faults
+            .push(fault(400, FaultKind::ChuteJam { chute: ChuteId(1) }));
+        let (kept, dropped) = candidates(&cfg, 1_000, 2_000, &Blame::default());
+        let ids: Vec<u32> = kept.iter().map(|c| c.fault.0).collect();
+        assert_eq!(ids, vec![1]);
+        assert!(dropped.is_empty());
     }
 
     #[test]
