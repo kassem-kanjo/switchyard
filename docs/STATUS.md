@@ -1,19 +1,17 @@
 # Switchyard: status
 
-**Updated:** 2026-10-22 (08:30) · **Phase:** CP3 merged → CEO check → V1 release
+**Updated:** 2026-10-22 (08:30) · **Phase:** V1 released → V2 (design and launch)
 
 ## Now
-- **CP1-CP3 merged into main** (PR #4 CP2, PR #5 CP3). CP3.2 done: viewer post-mortem panel (#7), honest harder planted suite (#8: ranking 44/48, interaction 37/48), Auditor fixes #19-#21. Overseer re-ran: fmt/clippy/cargo test 0, viewer typecheck/test 58/58/build 0; PR CI 11/11 green.
-- **Next: CEO check of CP3.**
-- Node 16 is first on PATH and breaks vite; use Node 22 (`$NODE_DIR` in machine.env).
+- **V1 tagged `v1.0.0`** (CEO review package: `docs/reviews/v1.md`). CP1-CP3 merged, the V1 depth work (#25, #18) and the security fixes (#11, #28) merged.
+- Waiting on the CEO: V1 review, licence choice, first piece topic (#26).
 
-## Next (milestone V1)
-1. CEO check of CP3 (screenshot: `docs/checkpoints/img/viewer-postmortem.png`; reports via `switchyard postmortem`).
-2. #22 cosmetic report fixes · #18 per-mask bands (optional).
-3. #9 README numbers and GIF · #10 demo video · #23 launch kit and first thought piece (`docs/insights.md`) · #11 `/security-review` · #12 tag `v1.0.0` and CEO review. Repo goes public at launch (licence: Kassem to choose MIT or source-available).
+## Next (milestone V2: design, UX, sellability, launch)
+1. #26 first thought piece (with Kassem).
+2. V2 CP1: #24 headline card + folded report, #22 jargon, visual pass. CP2: #9 GIF, #10 video. CP3: #23 launch kit; go public.
 
 ## How we build (CEO rule, 2026-10-22)
-Flash-tier OpenCode workers code -> Sonnet leads drive and review them -> Opus reviews the leads -> the Overseer re-verifies. At most two heavy workers at once (the Go plan has a 5-hour cap). Worktrees outside %TEMP% (`C:/Users/kassem/sy-work/`) to avoid LNK1104. Briefs: `~/.claude/skills/studio` section 2.
+Flash-tier OpenCode workers code -> Sonnet leads drive and review them -> Opus reviews the leads -> the Overseer re-verifies. At most two heavy workers at once (the Go plan has a 5-hour cap). Worker worktrees go outside %TEMP% (the path is in machine.env) to avoid LNK1104. Briefs: `~/.claude/skills/studio` section 2.
 
 ## Blockers
 - None.
