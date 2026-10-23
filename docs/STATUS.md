@@ -1,17 +1,16 @@
 # Switchyard: status
 
-**Updated:** 2026-10-22 (08:30) · **Phase:** CP3 built → CP3 gates → V1 release
+**Updated:** 2026-10-22 (08:30) · **Phase:** CP3 merged → CEO check → V1 release
 
 ## Now
-- `v0.1.0`; CP1 merged (#3). **CP2** PR #4 green except one pending Windows test job; merge when green.
-- **CP3** PR #5 (stacked on #4) at `8181244`: **sub-checkpoint CP3.1 done**, all Auditor findings #13-#17 fixed. Built by flash-tier OpenCode workers plus Sonnet leads, reviewed by Opus (4 extra fixes), gates re-run by the Overseer: fmt 0, clippy 0, `cargo test --workspace` 0, planted suite 24/24.
-- #13-#17 closed; follow-up #18 (per-lattice-value bands, not blocking). PR #4's stuck Windows job re-run.
-- **In flight (CP3.2):** Opus Auditor reviewing PR #5 + reading real reports (#6); Sonnet lead C on #8 (branch `test/planted-hard`); Sonnet lead D on #7 (branch `feat/viewer-postmortem`). Each lead drives one flash OpenCode worker at a time.
+- **CP1-CP3 merged into main** (PR #4 CP2, PR #5 CP3). CP3.2 done: viewer post-mortem panel (#7), honest harder planted suite (#8: ranking 44/48, interaction 37/48), Auditor fixes #19-#21. Overseer re-ran: fmt/clippy/cargo test 0, viewer typecheck/test 58/58/build 0; PR CI 11/11 green.
+- **Next: CEO check of CP3.**
+- Node 16 is first on PATH and breaks vite; use Node 22 (`$NODE_DIR` in machine.env).
 
 ## Next (milestone V1)
-1. CP3.2: the rest of #6 (`/code-review high`, visual check of reports, CI), then merge #4, then #5. **Then a CEO check of CP3.**
-2. #7 viewer post-mortem panel · #8 harder planted suite.
-3. #9 README numbers and GIF · #10 demo video · #11 `/security-review` · #12 tag `v1.0.0` and CEO review.
+1. CEO check of CP3 (screenshot: `docs/checkpoints/img/viewer-postmortem.png`; reports via `switchyard postmortem`).
+2. #22 cosmetic report fixes · #18 per-mask bands (optional).
+3. #9 README numbers and GIF · #10 demo video · #23 launch kit and first thought piece (`docs/insights.md`) · #11 `/security-review` · #12 tag `v1.0.0` and CEO review. Repo goes public at launch (licence: Kassem to choose MIT or source-available).
 
 ## How we build (CEO rule, 2026-10-22)
 Flash-tier OpenCode workers code -> Sonnet leads drive and review them -> Opus reviews the leads -> the Overseer re-verifies. At most two heavy workers at once (the Go plan has a 5-hour cap). Worktrees outside %TEMP% (`C:/Users/kassem/sy-work/`) to avoid LNK1104. Briefs: `~/.claude/skills/studio` section 2.
