@@ -18,6 +18,13 @@ use crate::Tick;
 use crate::faults::FaultSpec;
 use crate::ids::{ChuteId, DestinationId, FaultId, StationId};
 
+/// Largest allowed floor width or height, in cells.
+const MAX_FLOOR_SIDE: u16 = 512;
+/// Largest allowed floor area (`width * height`), in cells.
+const MAX_FLOOR_CELLS: u64 = 65_536;
+/// Largest allowed robot count.
+const MAX_ROBOTS: u32 = 2_000;
+
 /// A complete, self-contained description of one simulation scenario.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -415,6 +422,39 @@ impl ScenarioConfig {
                 height: self.floor.height,
             });
         }
+        if self.floor.width > MAX_FLOOR_SIDE {
+            return Err(ConfigError::OutOfRange {
+                field: "floor.width",
+                value: u64::from(self.floor.width),
+                min: 10,
+                max: u64::from(MAX_FLOOR_SIDE),
+            });
+        }
+        if self.floor.height > MAX_FLOOR_SIDE {
+            return Err(ConfigError::OutOfRange {
+                field: "floor.height",
+                value: u64::from(self.floor.height),
+                min: 10,
+                max: u64::from(MAX_FLOOR_SIDE),
+            });
+        }
+        let cells = u64::from(self.floor.width) * u64::from(self.floor.height);
+        if cells > MAX_FLOOR_CELLS {
+            return Err(ConfigError::OutOfRange {
+                field: "floor.area",
+                value: cells,
+                min: 100,
+                max: MAX_FLOOR_CELLS,
+            });
+        }
+        if self.fleet.robots > MAX_ROBOTS {
+            return Err(ConfigError::OutOfRange {
+                field: "fleet.robots",
+                value: u64::from(self.fleet.robots),
+                min: 1,
+                max: u64::from(MAX_ROBOTS),
+            });
+        }
         if self.arrivals.parcels_per_hour_per_station > TICKS_PER_HOUR {
             return Err(ConfigError::ArrivalRateTooHigh {
                 per_hour: self.arrivals.parcels_per_hour_per_station,
@@ -641,6 +681,69 @@ mod tests {
             cfg.validate(),
             Err(ConfigError::OutOfRange {
                 field: "fleet.max_inbound_per_station",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn floor_width_is_capped() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        cfg.floor.width = MAX_FLOOR_SIDE;
+        assert_eq!(cfg.validate(), Ok(()));
+        cfg.floor.width = MAX_FLOOR_SIDE + 1;
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "floor.width",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn floor_height_is_capped() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        cfg.floor.height = MAX_FLOOR_SIDE;
+        assert_eq!(cfg.validate(), Ok(()));
+        cfg.floor.height = MAX_FLOOR_SIDE + 1;
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "floor.height",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn floor_area_is_capped() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        // 256 * 256 is exactly the cell limit; the sides are each under 512.
+        cfg.floor.width = 256;
+        cfg.floor.height = 256;
+        assert_eq!(cfg.validate(), Ok(()));
+        // One more column is over the cell limit but still within the side cap.
+        cfg.floor.width = 257;
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "floor.area",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn robot_count_is_capped() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        cfg.fleet.robots = MAX_ROBOTS;
+        assert_eq!(cfg.validate(), Ok(()));
+        cfg.fleet.robots = MAX_ROBOTS + 1;
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "fleet.robots",
                 ..
             })
         ));
