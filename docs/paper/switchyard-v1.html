@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Replaying the Shift</title>
+<style>
+  @page { size: A4; margin: 16mm 19mm 15mm 19mm; }
+  :root { --ink: #1b1b1b; --muted: #5d5d5d; --rule: #c9c9c9; --accent: #1f4e79; --warm: #b5562b; --soft: #e8eef5; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: Cambria, "Georgia", serif; font-size: 9.7pt; line-height: 1.35; color: var(--ink); margin: 0; background: #fff; text-align: justify; hyphens: auto; }
+  h1 { font-size: 17pt; line-height: 1.2; text-align: center; margin: 0 0 3pt; font-weight: 700; letter-spacing: -0.2pt; }
+  .sub { text-align: center; font-style: italic; font-size: 11pt; margin: 0 0 7pt; color: #333; }
+  .meta { text-align: center; font-size: 9.5pt; color: var(--muted); margin-bottom: 10pt; }
+  .abstract { margin: 0 9mm 9pt; font-size: 9.4pt; line-height: 1.38; border-top: 0.6pt solid var(--rule); border-bottom: 0.6pt solid var(--rule); padding: 6pt 0; }
+  .abstract b { font-variant: small-caps; letter-spacing: 0.3pt; }
+  h2 { font-size: 11pt; margin: 7pt 0 2pt; font-weight: 700; text-align: left; }
+  h3 { font-size: 10.2pt; margin: 6pt 0 2pt; font-style: italic; font-weight: 600; text-align: left; }
+  p { margin: 0 0 4pt; }
+  .num { font-variant-numeric: tabular-nums lining-nums; }
+  figure { margin: 5pt 0 6pt; break-inside: avoid; }
+  figure svg { display: block; margin: 0 auto; }
+  figcaption { font-size: 8.6pt; line-height: 1.33; color: #333; margin-top: 3pt; text-align: justify; }
+  figcaption b { color: var(--ink); }
+  .eq { text-align: center; margin: 4pt 0 6pt; font-style: italic; }
+  ol.refs { font-size: 8.3pt; line-height: 1.3; padding-left: 14pt; margin: 2pt 0 0; text-align: left; }
+  ol.refs li { margin-bottom: 1.5pt; }
+  .findings { margin: 2pt 0 5pt; padding-left: 13pt; }
+  .findings li { margin-bottom: 2.5pt; }
+  .pb { break-before: page; }
+  svg text { font-family: Calibri, "Segoe UI", Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<h1>Replaying the Shift</h1>
+<p class="sub">Counterfactual post-mortems for robotic parcel sortation</p>
+<p class="meta">Kassem Kanjo &nbsp;·&nbsp; October 2026 &nbsp;·&nbsp; Switchyard v1.0.0</p>
+
+<div class="abstract">
+<b>Abstract.</b> When a robotic sortation hub loses a third of its throughput at 14:02, the operator wants three answers: what caused it, what each cause cost, and what would have fixed it. Today those answers come from a meeting and a guess. I argue that a sort floor fails the way a distributed system fails, and should be debugged the same way. I built Switchyard, a deterministic digital twin of a robot sort floor that traces every parcel, lets you break the floor on purpose, and writes its own incident post-mortem. Every claim in that post-mortem is proven by intervention: the shift is replayed with each combination of causes removed, blame is split with exact Shapley values, and uncertainty is measured by deliberately perturbing a system that has no noise of its own. On planted incidents the engine names the true cause 24 of 24 times; on a harder suite graded against an independent ground truth it ranks causes correctly in 44 of 48 cases. Building it also surfaced results I did not expect, including a way in which averages invent fixes that do not exist.
+</div>
+
+<h2>1&nbsp;&nbsp;The problem, and the idea</h2>
+<p>A modern sortation hub runs a few hundred mobile robots that carry parcels from induction stations to chutes. When something breaks, a robot dies in an aisle or a chute jams, the damage does not stay where it happened. It spreads as congestion through robots that never failed. By the time throughput drops, the alarm points at the symptom, not the cause, and when two or three faults overlap nobody can say how much each one cost.</p>
+<p>The tools that exist do not answer this. Design-time simulators tell you whether a layout will work before go-live. Fleet tools tell you what one robot is doing. Process mining tells you the process deviated. None of them answers <i>why did we lose 31 % at 14:02, and what is each cause worth?</i></p>
+<p>Software engineering solved a version of this problem years ago. Large services are instrumented end to end, every request is traced, failures are injected on purpose, and every incident ends in a blameless post-mortem with root causes and action items [1]. My starting point was simple: a sort floor <i>is</i> a distributed system. Robots are processes, aisles are shared resources, a jam is a partial outage, and a parcel is a request with a latency budget. If that is true, the whole observability toolkit should transfer. Switchyard is the test of that idea.</p>
+
+<h2>2&nbsp;&nbsp;Approach</h2>
+<h3>2.1&nbsp;&nbsp;A twin that can be rewound</h3>
+<p>The core is a deterministic simulator of the floor, written in Rust and compiled to WebAssembly so it also runs in the browser. Robots are coordinated with PIBT, a priority-inheritance path-finding algorithm [6], extended so that every robot that fails to move records <i>why</i> (blocked by another robot, by a cell, by a busy station or a full chute). These records chain into a causal trace for every parcel: “41 s blocked: R112 → R087 → dead robot R031.” The simulator is bit-identical across Windows, macOS, Linux and the browser, and it checkpoints itself every five simulated minutes. Determinism is the property everything else depends on: if the same inputs always give the same shift, then any difference between two runs is caused by what I changed, and nothing else.</p>
+
+<h3>2.2&nbsp;&nbsp;Detect, intervene, attribute</h3>
+<p>Each run is compared with a fault-free twin of itself. A one-sided CUSUM detector [2] on the per-minute shortfall, scaled by the twin’s own Poisson noise, opens the incident window. Every fault active in that window becomes a candidate cause. The engine then replays the shift from the nearest checkpoint for <i>every subset</i> of candidates removed, and scores each replay by the parcel-minutes of delay it recovers. That defines a cooperative game over the causes, and the fair split of the loss is the Shapley value [3]:</p>
+<p class="eq num">φ<sub>i</sub> = Σ<sub>S ⊆ N∖{i}</sub> &nbsp;|S|!&thinsp;(n−|S|−1)!&thinsp;/&thinsp;n! &nbsp;·&nbsp; [ v(S ∪ {i}) − v(S) ]</p>
+<p>Because the replays are interventions, not correlations, this is attribution in Pearl’s sense [8]: <i>what would have happened had this fault not occurred</i>. The same lattice of replays gives pairwise interaction indices [4], which tell you whether two faults overlapped (fixing one makes the other matter less) or compounded (together they did more damage than apart). It also gives degrees of responsibility [5] and the smallest set of causes whose removal recovers the loss. Candidate fixes (rerouting a chute, clearing dead robots faster, adding spares) are scored the same way: applied to the real shift and replayed.</p>
+
+<h3>2.3&nbsp;&nbsp;Manufacturing noise in a system that has none</h3>
+<p>This is the part I am proudest of. A deterministic simulator gives one answer per question, which sounds like precision but is not. Remove a fault and the planner’s trajectories diverge chaotically, so a recovery of 947 parcel-minutes might as easily have been 900 or 1,000. A single replay cannot tell you which differences are real. My solution is to <b>dither</b> the history: replay the actual shift several times, each with one causally irrelevant one-tick pause given to one robot, keeping only the copies that genuinely diverge. These are alternative histories that are equally plausible. Every intervention is then measured across all of them, and the spread becomes a noise band. Shares are reported with ±, two causes within twice the band are marked a tie, and any cause or fix inside the noise is reported as exactly that. The post-mortem only claims what it can prove.</p>
+
+<h2>3&nbsp;&nbsp;Results</h2>
+<h3>3.1&nbsp;&nbsp;One incident, fully explained</h3>
+<p>Figure 1 shows the engine on a shift where chute C289 jams and robots R57 and R119 die within the same minute. Throughput falls up to 47 % below the twin; by 01:02 the incident has cost 6,264 parcel-minutes and 110 parcels are more than ten minutes late. Ninety-six replays (eight cause subsets and four fixes, each across eight histories) take 3.7 seconds.</p>
+
+<figure>
+<svg width="560" height="124" viewBox="0 0 560 124" role="img" aria-label="Attribution and fixes with noise bands">
+  <text x="0" y="12" font-size="9.5" font-weight="700" fill="#1b1b1b">Share of the loss explained by each cause</text>
+  <text x="300" y="12" font-size="9.5" font-weight="700" fill="#1b1b1b">Loss recovered by each fix</text>
+  <!-- left axis: 0-100% over 200px starting x=92 -->
+  <g font-size="8.5" fill="#333">
+    <text x="88" y="38" text-anchor="end">Chute C289 jams</text>
+    <text x="88" y="62" text-anchor="end">Robot R119 dies</text>
+    <text x="88" y="86" text-anchor="end">Robot R57 dies</text>
+  </g>
+  <line x1="92" y1="22" x2="92" y2="96" stroke="#999" stroke-width="0.6"/>
+  <rect x="92" y="28" width="140" height="14" fill="#1f4e79"/>
+  <rect x="92" y="52" width="30" height="14" fill="#1f4e79"/>
+  <rect x="92" y="76" width="30" height="14" fill="#1f4e79"/>
+  <g stroke="#1b1b1b" stroke-width="0.9">
+    <line x1="226" y1="35" x2="238" y2="35"/><line x1="226" y1="31" x2="226" y2="39"/><line x1="238" y1="31" x2="238" y2="39"/>
+    <line x1="120" y1="59" x2="124" y2="59"/><line x1="120" y1="55" x2="120" y2="63"/><line x1="124" y1="55" x2="124" y2="63"/>
+    <line x1="118" y1="83" x2="126" y2="83"/><line x1="118" y1="79" x2="118" y2="87"/><line x1="118" y1="79" x2="118" y2="87"/><line x1="126" y1="79" x2="126" y2="87"/>
+  </g>
+  <g font-size="8.5" fill="#1b1b1b">
+    <text x="244" y="38">70 % ± 3</text>
+    <text x="130" y="62">15 % ± 1</text>
+    <text x="132" y="86">15 % ± 2</text>
+  </g>
+  <path d="M150 58 L160 58 L160 88 L150 88" fill="none" stroke="#b5562b" stroke-width="0.8"/>
+  <text x="164" y="76" font-size="8" fill="#b5562b" font-style="italic">tie: within noise</text>
+  <g font-size="7.5" fill="#777"><text x="92" y="108" text-anchor="middle">0</text><text x="192" y="108" text-anchor="middle">50 %</text><text x="292" y="108" text-anchor="middle">100 %</text></g>
+  <!-- right: fixes 0-100% over 140px starting x=410 -->
+  <g font-size="8.5" fill="#333">
+    <text x="406" y="38" text-anchor="end">Reroute C289 to C269</text>
+    <text x="406" y="62" text-anchor="end">Clear dead robots in 1 min</text>
+    <text x="406" y="86" text-anchor="end">8 robots per station (not 6)</text>
+    <text x="406" y="110" text-anchor="end">Release 10 spare robots</text>
+  </g>
+  <line x1="410" y1="22" x2="410" y2="120" stroke="#999" stroke-width="0.6"/>
+  <rect x="410" y="28" width="116.2" height="14" fill="#5b8bb8"/>
+  <rect x="410" y="52" width="39.2" height="14" fill="#5b8bb8"/>
+  <rect x="410" y="76" width="18.2" height="14" fill="#5b8bb8"/>
+  <rect x="410" y="100" width="2.8" height="14" fill="#5b8bb8"/>
+  <rect x="402.9" y="100" width="19.9" height="14" fill="none" stroke="#b5562b" stroke-width="0.8" stroke-dasharray="2 1.5"/>
+  <g font-size="8.5" fill="#1b1b1b">
+    <text x="531" y="38">83 %</text>
+    <text x="454" y="62">28 %</text>
+    <text x="433" y="86">13 %</text>
+    <text x="427" y="110" fill="#b5562b" font-style="italic">2 %, noise</text>
+  </g>
+</svg>
+<figcaption><b>Figure 1.</b> A three-fault incident, explained by replay. Left: exact Shapley shares with dither bands; the two robot failures are statistically indistinguishable, so the report calls them a tie instead of inventing an order. The jam also compounded with each failure (901 and 549 parcel-minutes of extra damage together). Right: candidate fixes applied to the real shift. Releasing ten spare robots, the intuitive response, recovers nothing measurable; it falls inside the noise (dashed box).</figcaption>
+</figure>
+
+<p>Two things in Figure 1 would change how a site is run. Releasing spare robots, the reflex in most control rooms, does nothing here, because the bottleneck is a chute and not the fleet. And clearing dead robots off loading points within one minute instead of five is worth 28 % of the loss, a floor procedure that costs nothing.</p>
+
+<h3>3.2&nbsp;&nbsp;Does it get the answer right?</h3>
+<p>On 24 planted incidents with a clear cause, the engine names it every time. That is a weak test, so I built a harder one: six classes of paired faults chosen to be close (near-tied outages, equal outages at different stations, duplicates, compounds, and pairs tuned to land inside the tie band), eight seeds each. Each pair is graded against an independent ground truth that simulates every fault alone and together and never calls the post-mortem, and grading reads the rendered report, the text an operator would see.</p>
+
+<figure>
+<svg width="560" height="132" viewBox="0 0 560 132" role="img" aria-label="Accuracy per class on the harder suite">
+  <g font-size="8.5" fill="#333">
+    <text x="0" y="12" font-weight="700" fill="#1b1b1b" font-size="9.5">Correct, out of 8 seeds per class</text>
+  </g>
+  <line x1="40" y1="98" x2="555" y2="98" stroke="#999" stroke-width="0.6"/>
+  <g font-size="7.5" fill="#777"><text x="34" y="101" text-anchor="end">0</text><text x="34" y="31" text-anchor="end">8</text></g>
+  <line x1="40" y1="28" x2="555" y2="28" stroke="#e2e2e2" stroke-width="0.5"/>
+  <!-- 6 groups, width 85 each starting x=50; bar w=26; height per unit 8.75 -->
+  <g fill="#1f4e79">
+    <rect x="58" y="28" width="26" height="70"/><rect x="143" y="28" width="26" height="70"/><rect x="228" y="36.75" width="26" height="61.25"/>
+    <rect x="313" y="28" width="26" height="70"/><rect x="398" y="45.5" width="26" height="52.5"/><rect x="483" y="36.75" width="26" height="61.25"/>
+  </g>
+  <g fill="#c98a5e">
+    <rect x="86" y="54.25" width="26" height="43.75"/><rect x="171" y="54.25" width="26" height="43.75"/><rect x="256" y="28" width="26" height="70"/>
+    <rect x="341" y="28" width="26" height="70"/><rect x="426" y="28" width="26" height="70"/><rect x="511" y="71.75" width="26" height="26.25"/>
+  </g>
+  <g font-size="7.5" fill="#1b1b1b" text-anchor="middle">
+    <text x="71" y="25">8</text><text x="99" y="51">5</text><text x="156" y="25">8</text><text x="184" y="51">5</text><text x="241" y="34">7</text><text x="269" y="25">8</text>
+    <text x="326" y="25">8</text><text x="354" y="25">8</text><text x="411" y="42">6</text><text x="439" y="25">8</text><text x="496" y="34">7</text><text x="524" y="69">3</text>
+  </g>
+  <g font-size="8.2" fill="#333" text-anchor="middle">
+    <text x="85" y="110">Near-tied</text><text x="170" y="110">Equal stations</text><text x="255" y="110">Surge + outage</text>
+    <text x="340" y="110">Duplicate</text><text x="425" y="110">Compound</text><text x="510" y="110">Tuned to tie</text>
+  </g>
+  <rect x="150" y="119" width="9" height="8" fill="#1f4e79"/><text x="163" y="126" font-size="8.2" fill="#333">Cause ranking (44/48)</text>
+  <rect x="290" y="119" width="9" height="8" fill="#c98a5e"/><text x="303" y="126" font-size="8.2" fill="#333">Interaction sign (37/48)</text>
+</svg>
+<figcaption><b>Figure 2.</b> Accuracy on the harder suite, graded against an independent ground truth. Ranking is right in 44 of 48 cases. All 11 interaction misses are small interactions (about 70–530 parcel-minutes) that sit near the noise band; large interactions are read correctly 24 of 24 times.</figcaption>
+</figure>
+
+<p>I report these rates as they came out. My first version of this suite scored 100 %, because I had swapped two classes the engine failed for easier ones. That was moving the goal posts, and it is exactly the mistake the engine exists to stop. The honest suite is the one above.</p>
+
+<h3>3.3&nbsp;&nbsp;Averages invent fixes</h3>
+<p>The most useful result came from a bug. An early report claimed that rerouting the jammed chute recovered <i>more</i> than removing the jam itself (5,162 against 5,076 parcel-minutes), the kind of counterintuitive finding that gets presented in a meeting. It was not real. The two numbers were medians taken over different histories. Compared history by history, the difference is centred on zero (Figure 3).</p>
+
+<figure>
+<svg width="560" height="104" viewBox="0 0 560 104" role="img" aria-label="Reroute minus removal under three comparisons">
+  <text x="0" y="12" font-size="9.5" font-weight="700" fill="#1b1b1b">Reroute minus removing the jam, in parcel-minutes</text>
+  <!-- axis -150..+150 over x=170..530 => 1.2 px per unit; zero at 350 -->
+  <line x1="170" y1="86" x2="530" y2="86" stroke="#999" stroke-width="0.6"/>
+  <line x1="350" y1="22" x2="350" y2="86" stroke="#bbb" stroke-width="0.6" stroke-dasharray="2 2"/>
+  <g font-size="7.5" fill="#777" text-anchor="middle"><text x="170" y="96">−150</text><text x="260" y="96">−75</text><text x="350" y="96">0</text><text x="440" y="96">+75</text><text x="530" y="96">+150</text></g>
+  <g font-size="8.5" fill="#333">
+    <text x="164" y="35" text-anchor="end">Two medians, different histories</text>
+    <text x="164" y="55" text-anchor="end">Paired, the real history</text>
+    <text x="164" y="75" text-anchor="end">Paired, mean of 8 histories</text>
+  </g>
+  <circle cx="453.2" cy="32" r="4" fill="#b5562b"/><text x="462" y="35" font-size="8.5" fill="#b5562b">+86: “reroute wins”</text>
+  <circle cx="362.7" cy="52" r="4" fill="#1f4e79"/><text x="371" y="55" font-size="8.5" fill="#1b1b1b">+11 (0.2 %)</text>
+  <line x1="188" y1="72" x2="470" y2="72" stroke="#1f4e79" stroke-width="1.2"/>
+  <line x1="188" y1="68" x2="188" y2="76" stroke="#1f4e79" stroke-width="1.2"/><line x1="470" y1="68" x2="470" y2="76" stroke="#1f4e79" stroke-width="1.2"/>
+  <circle cx="344" cy="72" r="4" fill="#1f4e79"/><text x="478" y="75" font-size="8.5" fill="#1b1b1b">−5 (mean)</text><text x="329" y="66" font-size="7.8" fill="#555" text-anchor="middle">each history: −135 to +100</text>
+</svg>
+<figcaption><b>Figure 3.</b> The same question answered three ways. Comparing two medians computed over different histories invents an 86 parcel-minute advantage. Pairing each history with itself shows the reroute and the removal tie, winning four histories each.</figcaption>
+</figure>
+
+<p>This generalises well beyond warehouses. Any operations team that compares the average outcome of “we did A” with the average outcome of “we did B”, taken over different days, can manufacture a fix that does not exist. The cure is the same one the engine uses: judge an intervention on paired outcomes, the same day replayed both ways.</p>
+
+<h2>4&nbsp;&nbsp;What the floor taught me</h2>
+<p>Simulation edge cases turned out to be real operational problems in miniature. Four stood out.</p>
+<ul class="findings">
+<li><b>Identical faults are not identical.</b> Two outages of the same length at different induction stations cost 3,930 and 4,690 parcel-minutes. Where a station sits sets its cost, so a uniform maintenance contract across stations is the wrong contract.</li>
+<li><b>Intuition misjudges combined incidents.</b> I expected an outage and a surge at the same station to overlap. They compounded in eight of eight runs.</li>
+<li><b>The floor hides how close to the edge it runs.</b> Most single-robot pauses change nothing at all; the floor routes around them. That resilience is real, but it also means a calm dashboard says little about the margin left.</li>
+<li><b>Small interactions are unknowable.</b> Whether two minor problems made each other worse cannot be resolved inside the noise of the system itself. A report that claims otherwise is guessing.</li>
+</ul>
+
+<h2>5&nbsp;&nbsp;On building this with AI</h2>
+<p>Switchyard sits where five fields meet: multi-agent path finding from robotics, site-reliability practice from software, cooperative game theory from economics, causal inference from statistics, and statistical process control from manufacturing. A conventional team would need an expert in each, and the idea at the centre, that an SRE post-mortem can be computed for a physical system by replaying it, only appears when those fields sit in one head at once. Working with AI gave me that. I could hold the thesis and the judgement while AI supplied fluent working depth in every field on demand: Grabisch–Roubens interactions next to PIBT priority inheritance next to CUSUM calibration.</p>
+<p>I also ran the build as a small company of AI agents: inexpensive models writing well-specified code, stronger models reviewing it, and an independent auditor reporting only to me. The auditor caught errors a single author would have shipped, including interaction labels that were inverted and a headline figure that silently reported a median instead of what happened. The lesson cuts both ways. The AI also produced the goal-post-moving test suite of §3.2, and it took a human question (“does that suite test anything?”) to catch it. AI widens what one person can build across disciplines; it does not remove the need for someone to decide what counts as true.</p>
+
+<h2>6&nbsp;&nbsp;Limits and next steps</h2>
+<p>The floor is simulated, not instrumented; the next step is to calibrate the twin against a real hub’s logs, where the same replay machinery would run on a digital copy of an actual shift. Small interactions remain inside the noise, and exact Shapley grows exponentially, so incidents with many simultaneous causes will need sampled attribution. The report is accurate but dense, and version 2 focuses on making it readable in ten seconds by the person who has to act on it.</p>
+
+<ol class="refs">
+<li>B. Beyer, C. Jones, J. Petoff, N. Murphy (eds.). <i>Site Reliability Engineering: How Google Runs Production Systems.</i> O’Reilly, 2016.</li>
+<li>E. S. Page. Continuous inspection schemes. <i>Biometrika</i> 41(1/2):100–115, 1954.</li>
+<li>L. S. Shapley. A value for n-person games. In <i>Contributions to the Theory of Games II</i>, Princeton University Press, 1953.</li>
+<li>M. Grabisch, M. Roubens. An axiomatic approach to the concept of interaction among players in cooperative games. <i>International Journal of Game Theory</i> 28:547–565, 1999.</li>
+<li>H. Chockler, J. Y. Halpern. Responsibility and blame: a structural-model approach. <i>Journal of Artificial Intelligence Research</i> 22:93–115, 2004.</li>
+<li>K. Okumura, M. Machida, X. Défago, Y. Tamura. Priority inheritance with backtracking for iterative multi-agent path finding. <i>Artificial Intelligence</i> 310, 2022.</li>
+<li>Switchyard source, design records and test suites: github.com/kassem-kanjo/switchyard (v1.0.0).</li>
+<li>J. Pearl. <i>Causality: Models, Reasoning, and Inference.</i> 2nd ed., Cambridge University Press, 2009.</li>
+</ol>
+
+</body>
+</html>
