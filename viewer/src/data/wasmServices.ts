@@ -56,18 +56,35 @@ class WasmFaults implements FaultControl {
 }
 
 class WasmPostmortem implements PostmortemProvider {
-  constructor(private readonly client: RpcClient) {}
+  constructor(
+    private readonly client: RpcClient,
+    private readonly fetchText: (url: string) => Promise<{ ok: boolean; text(): Promise<string> }> = (url) => fetch(url),
+  ) {}
   report(): Promise<string> {
     return this.client.rpc("postmortem_markdown");
+  }
+  async precomputed(preset: string): Promise<string | null> {
+    if (!/^[a-z0-9-]+$/.test(preset)) return null; // never build a URL from odd input
+    try {
+      const res = await this.fetchText(`reports/${preset}.md`);
+      const text = await res.text();
+      // The dev server answers unknown paths with index.html and status 200, which must read as "none".
+      return res.ok && text.startsWith("# ") ? text : null;
+    } catch {
+      return null;
+    }
   }
 }
 
 /** `Services` backed by the Rust sim in the worker behind `client`. */
-export function createWasmServices(client: RpcClient): Services {
+export function createWasmServices(
+  client: RpcClient,
+  fetchText?: (url: string) => Promise<{ ok: boolean; text(): Promise<string> }>,
+): Services {
   return {
     metrics: new WasmMetrics(client),
     traces: new WasmTraces(client),
     faults: new WasmFaults(client),
-    postmortem: new WasmPostmortem(client),
+    postmortem: new WasmPostmortem(client, fetchText),
   };
 }

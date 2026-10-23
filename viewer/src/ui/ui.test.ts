@@ -230,6 +230,7 @@ describe("mock data", () => {
     expect(t.spans.some((s) => s.phase === "blocked" && s.directBlocker !== null && s.rootCause)).toBe(true);
     expect(await svc.traces.getTrace(-1)).toBeNull();
     expect(await svc.postmortem.report()).toContain("Post-mortem");
+    expect(await svc.postmortem.precomputed("two-dead-robots-and-a-jam")).toBeNull();
   });
 
   it("MockWorld without the seeded incident has no loss", () => {
@@ -309,4 +310,26 @@ describe("mock data", () => {
       vi.unstubAllGlobals();
     }
   });
+});
+
+describe("precomputed post-mortem reports (public/reports)", () => {
+  const reports = import.meta.glob<string>("../../public/reports/*.md", { query: "?raw", import: "default", eager: true });
+  const files = Object.keys(reports).map((p) => p.split("/").pop()!);
+
+  it("ships a report for every chaos preset", () => {
+    expect(files.sort()).toEqual(["aisle-7-blocked.md", "peak-surge.md", "two-dead-robots-and-a-jam.md"]);
+  });
+
+  for (const f of files) {
+    it(`${f} parses into headings and tables with nothing left over`, () => {
+      const src = reports[`../../public/reports/${f}`]!;
+      expect(src.startsWith("# Post-mortem")).toBe(true);
+      const blocks = parseMarkdown(src);
+      expect(blocks.some((b) => b.t === "table")).toBe(true);
+      // A pipe row that did not become part of a table would show as raw text.
+      for (const b of blocks) {
+        if (b.t === "p") expect(b.inline.map((i) => i.v).join("")).not.toMatch(/^\s*\|.*\|\s*$/);
+      }
+    });
+  }
 });

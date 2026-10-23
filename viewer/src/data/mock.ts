@@ -230,6 +230,9 @@ class MockPostmortem implements PostmortemProvider {
   report(): Promise<string> {
     return Promise.resolve(MOCK_REPORT);
   }
+  precomputed(_preset: string): Promise<string | null> {
+    return Promise.resolve(null);
+  }
 }
 
 export function createMockServices(clock: () => number): Services {
