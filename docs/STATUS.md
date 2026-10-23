@@ -5,7 +5,8 @@
 ## Now
 - `v0.1.0`; CP1 merged (#3). **CP2** PR #4 green except one pending Windows test job; merge when green.
 - **CP3** PR #5 (stacked on #4) at `8181244`: **sub-checkpoint CP3.1 done**, all Auditor findings #13-#17 fixed. Built by flash-tier OpenCode workers plus Sonnet leads, reviewed by Opus (4 extra fixes), gates re-run by the Overseer: fmt 0, clippy 0, `cargo test --workspace` 0, planted suite 24/24.
-- Issues #13-#17 still show open on GitHub: closing them needs Kassem's OK (the auto-mode classifier blocks issue writes). Also to file: a follow-up for per-lattice-value noise bands (not blocking V1).
+- #13-#17 closed; follow-up #18 (per-lattice-value bands, not blocking). PR #4's stuck Windows job re-run.
+- **In flight (CP3.2):** Opus Auditor reviewing PR #5 + reading real reports (#6); Sonnet lead C on #8 (branch `test/planted-hard`); Sonnet lead D on #7 (branch `feat/viewer-postmortem`). Each lead drives one flash OpenCode worker at a time.
 
 ## Next (milestone V1)
 1. CP3.2: the rest of #6 (`/code-review high`, visual check of reports, CI), then merge #4, then #5. **Then a CEO check of CP3.**
