@@ -82,7 +82,10 @@ pub fn render(pm_: &PostMortem) -> String {
 
     let n = pm_.candidates.len();
     let att = &pm_.attribution;
+    // Facts (headline, Impact) come from the real history; `loss` is the
+    // median game the attribution divides (#20).
     let loss = pm_.loss();
+    let real_loss = pm_.real_loss();
     let loss_band = pm_.loss_band();
     let total = att.total();
     let all = att.all();
@@ -156,8 +159,8 @@ pub fn render(pm_: &PostMortem) -> String {
         clock_min(inc.start),
         pm_.score.max_dip_pct,
         clock(pm_.horizon),
-        pmin(loss),
-        pm_.masks()[0].median_late(),
+        pmin(real_loss),
+        pm_.real_late(),
         pm_.options.sla_extra_minutes,
     );
     if n == 0 {
@@ -222,7 +225,7 @@ pub fn render(pm_: &PostMortem) -> String {
         o,
         "| Delay at {} vs the fault-free twin | {} parcel-min (± {}) | [R0] |",
         clock(pm_.horizon),
-        pmin(loss),
+        pmin(real_loss),
         pminf(loss_band)
     );
     let _ = writeln!(
@@ -829,6 +832,34 @@ mod tests {
         );
         let row = md.lines().find(|l| l.starts_with("| 1 |")).unwrap();
         assert!(row.matches('±').count() >= 2, "share lacks ±: {row}");
+    }
+
+    /// #20: the headline and the Impact table state the real history's loss
+    /// and late count (index 0); the median over the dither copies is for
+    /// attribution only. Both places must agree.
+    #[test]
+    fn headline_facts_come_from_the_real_history_not_the_median() {
+        let mut pm = small_incident();
+        pm.dither = vec![RobotId(1), RobotId(2)];
+        assert_eq!(pm.histories(), 3);
+        // Real history 6 000 000 parcel-ticks / 7 late; the copies are lower,
+        // so the median (the middle value) is a different number.
+        pm.replays[0].delay = vec![6_000_000, 5_400_000, 5_000_000];
+        pm.replays[0].late = vec![7, 2, 3];
+        assert_ne!(pm.loss(), pm.real_loss());
+        let md = render(&pm);
+        let real = pmin(6_000_000);
+        assert!(
+            md.contains(&format!(
+                "cost **{real} parcel-minutes** of delay, and 7 parcels"
+            )),
+            "{md}"
+        );
+        assert!(
+            md.contains(&format!("| {real} parcel-min (± ")),
+            "Impact delay disagrees with the headline: {md}"
+        );
+        assert!(!md.contains(&format!("cost **{} parcel-minutes**", pmin(pm.loss()))));
     }
 
     #[test]

@@ -338,9 +338,7 @@ impl Attribution {
         // `i` a definite Yes.
         let sure = (0..=self.all())
             .filter(|&t| {
-                t & bit == 0
-                    && verdict(t) == Verdict::No
-                    && verdict(t | bit) == Verdict::Yes
+                t & bit == 0 && verdict(t) == Verdict::No && verdict(t | bit) == Verdict::Yes
             })
             .map(|t| t.count_ones())
             .min();
@@ -349,9 +347,7 @@ impl Attribution {
         // threshold somewhere in between.
         let possible = (0..=self.all())
             .filter(|&t| {
-                t & bit == 0
-                    && verdict(t) != Verdict::Yes
-                    && verdict(t | bit) != Verdict::No
+                t & bit == 0 && verdict(t) != Verdict::Yes && verdict(t | bit) != Verdict::No
             })
             .map(|t| t.count_ones())
             .min();
