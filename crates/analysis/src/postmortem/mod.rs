@@ -576,7 +576,7 @@ pub fn run(cfg: &ScenarioConfig, ticks: Tick, options: &Options) -> Result<PostM
 
     // 3. Candidates, fixes, hotspots.
     let (candidates, dropped) = if incident.is_some() {
-        candidates::candidates(&actual_cfg, window_end, &blame)
+        candidates::candidates(&actual_cfg, window_start, window_end, &blame)
     } else {
         (Vec::new(), Vec::new())
     };
