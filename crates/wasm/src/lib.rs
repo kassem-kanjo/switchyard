@@ -70,6 +70,12 @@ const WINDOW_MINUTES: usize = 60;
 /// to the native CLI, which runs them in parallel.
 pub const BROWSER_MAX_FAULTS: usize = 4;
 
+/// Longest run (ticks, 3 simulated hours) the in-browser post-mortem takes.
+/// Replays restart from the run start, so cost grows with the run: about 5 s
+/// at 2.4 h on one thread, a pause the panel warns about; beyond this the
+/// pause is too long for a page and the native CLI is the right tool.
+pub const BROWSER_MAX_TICKS: u32 = 3 * TICKS_PER_HOUR;
+
 /// Histories the in-browser post-mortem replays on. One means no dither: the
 /// report says its bands are thin (ADR 0006 §6); the CLI default is 8.
 const BROWSER_DITHER: usize = 1;
@@ -89,6 +95,20 @@ fn too_many_faults_report(n: usize, ticks: u32) -> String {
 
 - `switchyard postmortem --scenario <name> --ticks {ticks}`
 "
+    )
+}
+
+/// Markdown for a run longer than the browser takes on.
+fn too_long_report(ticks: u32) -> String {
+    format!(
+        "# Post-mortem
+
+> **Too long for the browser.** This run is {} simulated minutes; the in-browser post-mortem takes at most {} (every replay restarts from the run start, on one thread). Run the full analysis natively:
+
+- `switchyard postmortem --scenario <name> --ticks {ticks}`
+",
+        ticks / TICKS_PER_MINUTE,
+        BROWSER_MAX_TICKS / TICKS_PER_MINUTE
     )
 }
 
@@ -493,7 +513,8 @@ impl WasmSim {
     /// It replays the scenario this session holds, including the faults
     /// injected from the viewer, up to the current tick, so it blocks the
     /// worker for as long as the replays take. A run with no faults, or with
-    /// more than [`BROWSER_MAX_FAULTS`], gets an explanatory report instead
+    /// more than [`BROWSER_MAX_FAULTS`], or longer than [`BROWSER_MAX_TICKS`],
+    /// gets an explanatory report instead
     /// of an analysis.
     #[must_use]
     pub fn postmortem_markdown(&self) -> String {
@@ -505,6 +526,9 @@ impl WasmSim {
         }
         if n > BROWSER_MAX_FAULTS {
             return too_many_faults_report(n, ticks);
+        }
+        if ticks > BROWSER_MAX_TICKS {
+            return too_long_report(ticks);
         }
         let options = postmortem::Options {
             dither: BROWSER_DITHER,
@@ -911,6 +935,20 @@ mod tests {
         let md = too_many_faults_report(BROWSER_MAX_FAULTS + 1, 7200);
         assert!(md.contains("switchyard postmortem"));
         assert!(md.contains("--ticks 7200"));
+    }
+
+    #[test]
+    fn postmortem_beyond_the_browser_tick_cap_points_to_the_cli() {
+        let mut w = small();
+        w.inject(&request("robot_failure", &json!({"count": 1}), 600, 1200))
+            .unwrap();
+        w.step(BROWSER_MAX_TICKS + 1);
+        let md = w.postmortem_markdown();
+        assert!(md.contains("Too long for the browser"), "{md}");
+        assert!(
+            md.contains(&format!("--ticks {}", BROWSER_MAX_TICKS + 1)),
+            "{md}"
+        );
     }
 
     #[test]

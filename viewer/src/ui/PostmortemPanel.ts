@@ -27,7 +27,7 @@ export class PostmortemPanel {
         "p",
         { class: "note" },
         "Finds the incident, replays each candidate cause with it removed, and ranks them by lost parcels recovered. " +
-          "Presets with faults ship a full report; for your own run, inject up to 4 faults and analyse it here.",
+          "Presets with faults ship a full report; for your own run, inject up to 4 faults and analyse it here (runs up to 3 simulated hours).",
       ),
       this.button,
       this.source,
@@ -53,7 +53,7 @@ export class PostmortemPanel {
   private async run(): Promise<void> {
     this.button.disabled = true;
     this.source.textContent = "Live analysis of the current run (in the browser, thin noise bands).";
-    this.out.replaceChildren(h("p", { class: "note" }, "Replaying candidate causes... the floor pauses until this finishes."));
+    this.out.replaceChildren(h("p", { class: "note" }, "Replaying candidate causes... this can take several seconds on a long run, and the floor pauses until it finishes."));
     try {
       renderMarkdown(await this.provider.report(), this.out);
     } catch (err) {
