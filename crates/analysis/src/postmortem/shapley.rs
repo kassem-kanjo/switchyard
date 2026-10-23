@@ -262,6 +262,17 @@ impl Attribution {
         Verdict::of(x as f64, threshold, band)
     }
 
+    /// Verdict for the mask `s`. The full set `N` recovers all of `v(N)` by
+    /// definition, so it is always `Yes`: the noise band cannot make "remove
+    /// every cause" insufficient to explain the loss it is defined as.
+    fn verdict_of_mask(&self, s: usize, tau_pct: i64, band: f64) -> Verdict {
+        if s == self.all() {
+            Verdict::Yes
+        } else {
+            self.verdict(self.v[s], tau_pct, band)
+        }
+    }
+
     /// Minimal sufficient sets with the noise band applied: `sure` holds the
     /// smallest masks that *definitely* reach `tau_pct` %, `near` the
     /// WithinNoise masks that might with less replay noise. Empty (default)
@@ -271,7 +282,6 @@ impl Attribution {
         if self.total() <= 0 {
             return MinimalSets::default();
         }
-        let verdict = |x: i64| self.verdict(x, tau_pct, band);
         // Walk the sizes upward, remembering each size's WithinNoise masks
         // until we know how far "near" may reach. A verdict is never both
         // Yes and WithinNoise, so `sure` and `near` are disjoint for free.
@@ -280,7 +290,7 @@ impl Attribution {
             let (mut yes, mut noise) = (Vec::new(), Vec::new());
             for s in 1..=self.all() {
                 if s.count_ones() as usize == k {
-                    match verdict(self.v[s]) {
+                    match self.verdict_of_mask(s, tau_pct, band) {
                         Verdict::Yes => yes.push(s),
                         Verdict::WithinNoise => noise.push(s),
                         Verdict::No => {}
@@ -322,15 +332,15 @@ impl Attribution {
                 possible: None,
             };
         }
-        let verdict = |x: i64| self.verdict(x, tau_pct, band);
+        let verdict = |s: usize| self.verdict_of_mask(s, tau_pct, band);
         let bit = 1 << i;
         // Sure pivot: without `i` the contingency is a definite No and with
         // `i` a definite Yes.
         let sure = (0..=self.all())
             .filter(|&t| {
                 t & bit == 0
-                    && verdict(self.v[t]) == Verdict::No
-                    && verdict(self.v[t | bit]) == Verdict::Yes
+                    && verdict(t) == Verdict::No
+                    && verdict(t | bit) == Verdict::Yes
             })
             .map(|t| t.count_ones())
             .min();
@@ -340,8 +350,8 @@ impl Attribution {
         let possible = (0..=self.all())
             .filter(|&t| {
                 t & bit == 0
-                    && verdict(self.v[t]) != Verdict::Yes
-                    && verdict(self.v[t | bit]) != Verdict::No
+                    && verdict(t) != Verdict::Yes
+                    && verdict(t | bit) != Verdict::No
             })
             .map(|t| t.count_ones())
             .min();
@@ -448,6 +458,24 @@ mod tests {
         // Band 0 degenerates to the hard comparison.
         assert_eq!(Verdict::of(10.0, 10.0, 0.0), Verdict::Yes);
         assert_eq!(Verdict::of(9.99, 10.0, 0.0), Verdict::No);
+    }
+
+    #[test]
+    fn the_full_set_is_always_sufficient_whatever_the_noise() {
+        // One cause, v(N) = 100, band 25: 100 - 25 < the 90 threshold, so the
+        // plain value test says WithinNoise. But removing every cause recovers
+        // v(N) by definition (audit #19: sole cause showed responsibility 0).
+        let a = Attribution::new(&[0, 100]);
+        let m = a.minimal_sufficient_within(90, 25.0);
+        assert_eq!(m.sure, vec![1]);
+        assert!(m.near.is_empty());
+        assert_eq!(
+            a.contingency_within(0, 90, 25.0),
+            Contingency {
+                sure: Some(0),
+                possible: Some(0),
+            }
+        );
     }
 
     #[test]
