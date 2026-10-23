@@ -155,8 +155,10 @@ pub struct ParcelDelay {
     pub unmatched: u32,
 }
 
+/// Ticks (or parcel-ticks) as minutes (parcel-minutes).
+#[must_use]
 #[allow(clippy::cast_precision_loss)]
-const fn ticks_to_minutes(t: f64) -> f64 {
+pub const fn ticks_to_minutes(t: f64) -> f64 {
     t / TICKS_PER_MINUTE as f64
 }
 
@@ -234,6 +236,25 @@ pub struct ResilienceScore {
     pub baseline_utilisation: f64,
 }
 
+/// The twin's regular parcels by cross-run identity `(station, key)`.
+/// Build it once when many runs are scored against the same twin (a
+/// post-mortem scores hundreds of replays).
+#[derive(Clone, Debug, Default)]
+pub struct TwinIndex<'a>(BTreeMap<(u16, u64), &'a ParcelRecord>);
+
+impl<'a> TwinIndex<'a> {
+    /// Index the regular parcels of `twin`.
+    #[must_use]
+    pub fn new(twin: &'a [ParcelRecord]) -> Self {
+        Self(
+            twin.iter()
+                .filter(|p| !p.is_surge())
+                .map(|p| ((p.station.0, p.key), p))
+                .collect(),
+        )
+    }
+}
+
 /// Extra latency of the faulted run's regular parcels over their twins,
 /// both censored at `horizon` (see the module docs).
 #[must_use]
@@ -243,11 +264,18 @@ pub fn parcel_delay(
     horizon: Tick,
     sla_extra_minutes: u32,
 ) -> ParcelDelay {
-    let by_id: BTreeMap<(u16, u64), &ParcelRecord> = twin
-        .iter()
-        .filter(|p| !p.is_surge())
-        .map(|p| ((p.station.0, p.key), p))
-        .collect();
+    parcel_delay_indexed(&TwinIndex::new(twin), faulted, horizon, sla_extra_minutes)
+}
+
+/// [`parcel_delay`] against a prebuilt [`TwinIndex`].
+#[must_use]
+pub fn parcel_delay_indexed(
+    twin: &TwinIndex<'_>,
+    faulted: &[ParcelRecord],
+    horizon: Tick,
+    sla_extra_minutes: u32,
+) -> ParcelDelay {
+    let by_id = &twin.0;
     let sla = i64::from(sla_extra_minutes) * i64::from(TICKS_PER_MINUTE);
     let mut out = ParcelDelay::default();
     for p in faulted.iter().filter(|p| !p.is_surge()) {

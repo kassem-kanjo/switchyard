@@ -437,6 +437,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 name = "switchyard-analysis"
 version = "0.1.0"
 dependencies = [
+ "insta",
+ "proptest",
+ "rayon",
  "switchyard-core",
  "switchyard-trace",
 ]
@@ -479,6 +482,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "switchyard-analysis",
  "switchyard-core",
  "switchyard-trace",
  "wasm-bindgen",

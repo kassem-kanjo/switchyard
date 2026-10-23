@@ -5,6 +5,7 @@
 
 mod chaos;
 mod export;
+mod postmortem;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -44,6 +45,9 @@ enum Command {
     Chaos(chaos::ChaosArgs),
     /// Export per-parcel traces (Perfetto, OTLP JSON or JSONL).
     Export(export::ExportArgs),
+    /// Detect an incident, prove its causes by replay and write a
+    /// post-mortem.
+    Postmortem(postmortem::PostmortemArgs),
 }
 
 fn main() -> ExitCode {
@@ -61,6 +65,7 @@ fn main() -> ExitCode {
             }
         },
         Command::Chaos(args) => chaos::main(&args),
+        Command::Postmortem(args) => postmortem::main(&args),
         Command::Export(args) => match export::run_export(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

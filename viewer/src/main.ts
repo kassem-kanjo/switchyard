@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   );
   const tracePanel = new TracePanel(panels.trace, services.traces);
   const faultPanel = new FaultPanel(panels.faults, services.faults, () => nowTick);
-  new PostmortemPanel(panels.postmortem, services.postmortem);
+  new PostmortemPanel(panels.postmortem, services.postmortem, preset);
   const refreshSide = () => {
     chart.update(services.metrics.series());
     void faultPanel.refresh();

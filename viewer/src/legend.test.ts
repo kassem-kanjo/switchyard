@@ -24,6 +24,7 @@ describe("parsePreset", () => {
   it("accepts known presets", () => {
     expect(parsePreset("?preset=medium")).toBe("medium");
     expect(parsePreset("?preset=large")).toBe("large");
+    expect(parsePreset("?preset=two-dead-robots-and-a-jam")).toBe("two-dead-robots-and-a-jam");
   });
   it("falls back with a warning", () => {
     const w: string[] = [];

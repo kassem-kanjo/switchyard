@@ -35,3 +35,22 @@ ADR 0005 chose root-cause analysis by counterfactual replay. CP2's review showed
 ## Consequences
 - Every number in a report is traceable to a specific replay or mask.
 - The engine depends on CP3 core work: `Sim: Clone`, `disable_fault` on a running sim, a world hash and incremental distance rebuilds.
+
+## Amendment (2026-10-22): CUSUM threshold h
+**Decision 1 said "start with h = 5σ and calibrate"; the engine ships h = 3σ (k = 0.5σ).** The justification lives in `crates/analysis/src/postmortem/detect.rs` ("Calibration of `h`"); this section records it where decisions are tracked, with the long-shift check the CP3 audit asked for (issue #17).
+
+**Why 3, not 5.**
+- The relevant null is a run and its twin sharing every arrival, with only robot trajectories perturbed (1-tick robot failures on the same seed). Its largest CUSUM peak over 160 simulated hours (40 pairs × 2 h on the small and medium floors) was 1.0. The different-seed null (peaks up to 15.5) carries arrival noise a run and its twin never have, so it is the wrong yardstick.
+- h = 3 is three times that largest null peak. h = 5 missed a small-floor surge costing about 700 parcel-minutes (peak 3.1).
+- Trade-off: a lower h detects smaller incidents sooner but raises the false-alarm rate; a higher h does the reverse. With a null peak of 1.0 there is headroom either way, so detection delay and sensitivity decided it. The window start is Page's change-point estimate, so a lower h does not move the start later.
+
+**Calibration on long shifts (new).** `calibrate_h_on_long_shifts` (`crates/analysis/tests/calibration.rs`, `#[ignore]`, release) repeats the perturbed-path null on the medium floor for 8 h and 10 h shifts, 6 seeds each, with a 1-tick robot failure every 30 simulated minutes (16 and 20 perturbations). Run: `cargo test -p switchyard-analysis --release --test calibration -- --ignored --nocapture` (about 30 s).
+
+| Shift | Seeds | Peak median | Peak max | Alarms at h=2 | h=3 | h=4 |
+|---|---|---|---|---|---|---|
+| 8 h | 6 | 1.00 | 1.23 | 0 | 0 | 0 |
+| 10 h | 6 | 1.00 | 1.23 | 0 | 0 | 0 |
+
+Reading: no false alarms at h = 2, 3 or 4 on either length, and the peak did not grow over the last 2 hours (the 10 h peaks equal the 8 h ones, so the maximum is set early, not by accumulation: the one-sided recursion resets to 0 whenever the deficit goes quiet). The two rows are not independent: each 10 h run is the 8 h run with the same seed and perturbations continued for 2 more hours, so the evidence is 6 runs of 10 h (60 simulated hours), not 12. The largest peak, 1.23, leaves h = 3 a factor of 2.4 of headroom. **h = 3 stands.** Limits: 6 seeds per length and one floor, so it shows headroom rather than bounding the false-alarm rate tightly (0 alarms in 6 is still compatible with a rate near 40 %); a different floor or a much noisier fleet should repeat the run.
+
+**Report wording.** The report no longer hard-codes "three times": it prints `h / 1.0` (the largest null peak) from the live parameter, so changing `h` cannot leave a stale sentence.

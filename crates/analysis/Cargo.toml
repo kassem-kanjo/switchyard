@@ -11,6 +11,14 @@ repository.workspace = true
 [dependencies]
 switchyard-core.workspace = true
 switchyard-trace.workspace = true
+# Replays of a post-mortem are independent sims: rayon runs them in
+# parallel and collects in a fixed order (ADR 0006, section 7).
+rayon = "1"
+
+[dev-dependencies]
+rayon = "1"
+proptest.workspace = true
+insta = { version = "1", default-features = false }
 
 [lints]
 workspace = true

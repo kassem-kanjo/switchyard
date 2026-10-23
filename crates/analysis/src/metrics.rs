@@ -11,10 +11,18 @@ use switchyard_core::events::Event;
 use switchyard_core::faults::SURGE_KEY_FLAG;
 use switchyard_core::ids::StationId;
 use switchyard_core::sim::Sim;
-use switchyard_core::world::RobotState;
+use switchyard_core::world::{Phase, RobotState};
 
 /// Ticks per simulated minute (1 tick = 0.5 s).
 pub const TICKS_PER_MINUTE: Tick = 120;
+
+/// The first tick of minute `m` (saturating).
+#[must_use]
+pub fn minute_tick(m: usize) -> Tick {
+    Tick::try_from(m)
+        .unwrap_or(Tick::MAX)
+        .saturating_mul(TICKS_PER_MINUTE)
+}
 
 /// One parcel of a run: its cross-run identity and its timing.
 ///
@@ -136,6 +144,24 @@ const fn has_work(state: RobotState) -> bool {
         state,
         RobotState::ToInduction | RobotState::Loading | RobotState::ToChute | RobotState::Dropping
     )
+}
+
+/// Every parcel of `sim` read from its current state, without the event
+/// stream: a delivered parcel's drop tick is the start of its `Dropped`
+/// phase. Replays that resume from a checkpoint use this (they have no
+/// events before the checkpoint); it equals [`MetricsRecorder::parcels`]
+/// for a run recorded from tick 0.
+#[must_use]
+pub fn parcels_of(sim: &Sim) -> Vec<ParcelRecord> {
+    let p = &sim.world().parcels;
+    (0..p.len())
+        .map(|i| ParcelRecord {
+            station: p.station[i],
+            key: p.key[i],
+            arrived: p.arrived[i],
+            dropped: (p.phase[i] == Phase::Dropped).then_some(p.phase_since[i]),
+        })
+        .collect()
 }
 
 /// Builds a [`MinuteSeries`] from a run's events, one tick at a time.
@@ -282,5 +308,29 @@ mod tests {
         assert_eq!(u64::from(s.backlog[9]), st.queued + st.in_flight);
         assert!(s.utilisation.iter().all(|&u| (0.0..=1.0).contains(&u)));
         assert!(s.mean_utilisation() > 0.0);
+    }
+
+    #[test]
+    fn parcels_read_from_the_state_match_the_recorded_ones() {
+        let mut cfg = ScenarioConfig::from_toml_str(SMALL_TOML).unwrap();
+        cfg.faults.push(switchyard_core::faults::FaultSpec {
+            at: 300,
+            duration: 600,
+            kind: switchyard_core::faults::FaultKind::VolumeSurge {
+                station: None,
+                factor_pct: 200,
+            },
+        });
+        let mut sim = Sim::new(&cfg).unwrap();
+        let mut rec = MetricsRecorder::new(cfg.fleet.robots as usize);
+        let mut events = Vec::new();
+        for _ in 0..1_800 {
+            events.clear();
+            sim.step(&mut events);
+            rec.record_tick(&events);
+        }
+        let from_state = parcels_of(&sim);
+        assert_eq!(from_state, rec.parcels(&sim));
+        assert!(from_state.iter().any(ParcelRecord::is_surge));
     }
 }

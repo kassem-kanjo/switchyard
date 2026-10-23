@@ -43,6 +43,7 @@ mod json;
 pub mod store;
 
 use serde::Serialize;
+use switchyard_analysis::postmortem::{self, report};
 use switchyard_core::TICKS_PER_HOUR;
 use switchyard_core::config::ScenarioConfig;
 use switchyard_core::events::Event;
@@ -64,15 +65,52 @@ pub const TICKS_PER_MINUTE: u32 = TICKS_PER_HOUR / 60;
 /// Minutes of history in the chart series.
 const WINDOW_MINUTES: usize = 60;
 
-/// Text of [`WasmSim::postmortem_markdown`] until the post-mortem engine
-/// (checkpoint 3) is wired in. The first line is what the viewer shows.
-pub const POSTMORTEM_PLACEHOLDER: &str = "# Post-mortem (placeholder)\n\n\
-> **Not available yet.** The post-mortem engine lands in checkpoint 3; this \
-text is a stand-in so the panel can be wired end to end.\n\n\
-## What will be here\n\
-- The size of the throughput drop against the fault-free twin.\n\
-- Root causes, each verified by replaying the run with that cause removed.\n\
-- What would have helped.\n";
+/// Most scheduled faults the in-browser post-mortem accepts (ADR 0006 §8).
+/// Replays grow as 2^n and the browser has one thread, so bigger cases belong
+/// to the native CLI, which runs them in parallel.
+pub const BROWSER_MAX_FAULTS: usize = 4;
+
+/// Longest run (ticks, 3 simulated hours) the in-browser post-mortem takes.
+/// Replays restart from the run start, so cost grows with the run: about 5 s
+/// at 2.4 h on one thread, a pause the panel warns about; beyond this the
+/// pause is too long for a page and the native CLI is the right tool.
+pub const BROWSER_MAX_TICKS: u32 = 3 * TICKS_PER_HOUR;
+
+/// Histories the in-browser post-mortem replays on. One means no dither: the
+/// report says its bands are thin (ADR 0006 §6); the CLI default is 8.
+const BROWSER_DITHER: usize = 1;
+
+/// Report shown when the run has no fault to explain.
+const NO_FAULTS_REPORT: &str = "# Post-mortem
+
+> **Nothing to analyse yet.** This run has no scheduled fault, so there is no incident to explain. Inject a fault from the Faults tab, let the run go on for a few simulated minutes, then run the post-mortem again.
+";
+
+/// Markdown for a run with more faults than the browser takes on.
+fn too_many_faults_report(n: usize, ticks: u32) -> String {
+    format!(
+        "# Post-mortem
+
+> **Too large for the browser.** This run has {n} scheduled faults; the in-browser post-mortem takes at most {BROWSER_MAX_FAULTS} (replays grow as 2^n and the browser has one thread). Run the full analysis natively:
+
+- `switchyard postmortem --scenario <name> --ticks {ticks}`
+"
+    )
+}
+
+/// Markdown for a run longer than the browser takes on.
+fn too_long_report(ticks: u32) -> String {
+    format!(
+        "# Post-mortem
+
+> **Too long for the browser.** This run is {} simulated minutes; the in-browser post-mortem takes at most {} (every replay restarts from the run start, on one thread). Run the full analysis natively:
+
+- `switchyard postmortem --scenario <name> --ticks {ticks}`
+",
+        ticks / TICKS_PER_MINUTE,
+        BROWSER_MAX_TICKS / TICKS_PER_MINUTE
+    )
+}
 
 /// The version of the simulation core compiled into this module.
 #[wasm_bindgen]
@@ -469,11 +507,42 @@ impl WasmSim {
         to_json(&active)
     }
 
-    /// The post-mortem report as Markdown. A clearly marked placeholder
-    /// ([`POSTMORTEM_PLACEHOLDER`]) until checkpoint 3 lands.
+    /// The post-mortem of the run so far, as Markdown (ADR 0006 §8: small
+    /// cases run in the browser, bigger ones are precomputed or native).
+    ///
+    /// It replays the scenario this session holds, including the faults
+    /// injected from the viewer, up to the current tick, so it blocks the
+    /// worker for as long as the replays take. A run with no faults, or with
+    /// more than [`BROWSER_MAX_FAULTS`], or longer than [`BROWSER_MAX_TICKS`],
+    /// gets an explanatory report instead
+    /// of an analysis.
     #[must_use]
     pub fn postmortem_markdown(&self) -> String {
-        POSTMORTEM_PLACEHOLDER.to_owned()
+        let cfg = self.sim.config();
+        let n = cfg.enabled_faults().count();
+        let ticks = self.sim.tick();
+        if n == 0 {
+            return NO_FAULTS_REPORT.to_owned();
+        }
+        if n > BROWSER_MAX_FAULTS {
+            return too_many_faults_report(n, ticks);
+        }
+        if ticks > BROWSER_MAX_TICKS {
+            return too_long_report(ticks);
+        }
+        let options = postmortem::Options {
+            dither: BROWSER_DITHER,
+            ..postmortem::Options::default()
+        };
+        match postmortem::run(cfg, ticks, &options) {
+            Ok(pm) => report::render(&pm),
+            Err(e) => format!(
+                "# Post-mortem
+
+> **Failed.** {e}
+"
+            ),
+        }
     }
 }
 
@@ -852,8 +921,46 @@ mod tests {
     }
 
     #[test]
-    fn postmortem_is_a_marked_placeholder() {
+    fn postmortem_without_faults_says_there_is_nothing_to_analyse() {
         let md = small().postmortem_markdown();
-        assert!(md.starts_with("# Post-mortem (placeholder)"));
+        assert!(md.starts_with(
+            "# Post-mortem
+"
+        ));
+        assert!(md.contains("Nothing to analyse"));
+    }
+
+    #[test]
+    fn postmortem_beyond_the_browser_limit_points_to_the_cli() {
+        let md = too_many_faults_report(BROWSER_MAX_FAULTS + 1, 7200);
+        assert!(md.contains("switchyard postmortem"));
+        assert!(md.contains("--ticks 7200"));
+    }
+
+    #[test]
+    fn postmortem_beyond_the_browser_tick_cap_points_to_the_cli() {
+        let mut w = small();
+        w.inject(&request("robot_failure", &json!({"count": 1}), 600, 1200))
+            .unwrap();
+        w.step(BROWSER_MAX_TICKS + 1);
+        let md = w.postmortem_markdown();
+        assert!(md.contains("Too long for the browser"), "{md}");
+        assert!(
+            md.contains(&format!("--ticks {}", BROWSER_MAX_TICKS + 1)),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn postmortem_of_an_injected_fault_is_a_real_report() {
+        let mut w = small();
+        w.step(120);
+        w.inject(&request("robot_failure", &json!({"count": 2}), 600, 1200))
+            .unwrap();
+        w.step(4800);
+        let md = w.postmortem_markdown();
+        assert!(md.starts_with("# "), "{md}");
+        assert!(!md.contains("Nothing to analyse"), "{md}");
+        assert!(!md.contains("**Failed.**"), "{md}");
     }
 }

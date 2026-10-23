@@ -100,6 +100,8 @@ export interface FaultControl {
 export interface PostmortemProvider {
   /** Markdown report. Treated as untrusted text by the UI. */
   report(): Promise<string>;
+  /** Precomputed report for a preset (ADR 0006 section 8), or null when there is none. Untrusted text. */
+  precomputed(preset: string): Promise<string | null>;
 }
 
 export interface Services {
