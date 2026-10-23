@@ -36,7 +36,7 @@ Shapley values and shares are computed from every replay [R0–R7]; *Alone* and 
 Interaction: chute C289 jams (F0) and robot R57 breaks down (F1) compound (together they did more damage than each did alone), -901 parcel-min [R1, R2, R3].
 Interaction: chute C289 jams (F0) and robot R119 breaks down (F2) compound (together they did more damage than each did alone), -549 parcel-min [R1, R4, R5].
 
-Smallest set of causes whose removal recovers at least 90 % of the recoverable loss (judged against the ± 356 parcel-min noise): {F0, F1, F2} [R7].
+Smallest set of causes whose removal recovers at least 90 % of the recoverable loss (each judged against its own replay noise): {F0, F1, F2} [R7].
 
 Near misses (within the noise of the 90 % threshold, so possibly just as sufficient): {F0, F1} [R3] or {F0, F2} [R5].
 
