@@ -4,17 +4,18 @@
 
 ## Summary
 
-From 00:30 sorted throughput fell up to 47 % below the fault-free twin. By 01:02 the incident had cost **6190 parcel-minutes** of delay, and 87 parcels were more than 10 min late [R0].
-Chute C289 jams (F0) explains 70 % ± 3 % (4329 parcel-min) [R0–R7]; robot R119 breaks down (F2) explains 15 % ± 1 % (947 parcel-min) [R0–R7]; robot R57 breaks down (F1) explains 15 % ± 2 % (921 parcel-min) [R0–R7]. -6 parcel-min (-0 %) is not explained by removing these causes [R7].
+From 00:30 sorted throughput fell up to 47 % below the fault-free twin. By 01:02 the incident had cost **6264 parcel-minutes** of delay, and 110 parcels were more than 10 min late [R0].
+Chute C289 jams (F0) explains 70 % ± 3 % (4329 parcel-min) [R0–R7]; robot R119 breaks down (F2) explains 15 % ± 1 % (947 parcel-min) [R0–R7]; robot R57 breaks down (F1) explains 15 % ± 2 % (921 parcel-min) [R0–R7]. -6 parcel-min (-0 %) of the 6190 parcel-min median loss across the 8 histories (the figure the shares divide) is not explained by removing these causes [R7].
 
-Best fix: **send chute C289's destination to C269 while it is jammed** would have recovered 5162 parcel-min (83 % of the loss) [X2].
+Best fix: **send chute C289's destination to C269 from the jam on (never undone)** would have recovered 5162 parcel-min (83 % of the loss) [X2].
 
 ## Impact
 
 | Measure | Value | Source |
 |---|---|---|
-| Delay at 01:02 vs the fault-free twin | 6190 parcel-min (± 356) | [R0] |
-| Parcels more than 10 min late (whole run) | 110 | [A, T] |
+| Delay at 01:02 vs the fault-free twin | 6264 parcel-min (± 356) | [R0] |
+| Parcels more than 10 min late at 01:02 | 110 | [R0] |
+| Parcels more than 10 min late (whole run, to 02:00) | 110 | [A, T] |
 | Peak backlog | 596 parcels (twin 91) | [A, T] |
 | Worst minute / time to recover | 47 % below the twin / 15 min | [A, T] |
 | Stations / chutes out of action at once | 2 / 1 | [A] |
@@ -63,7 +64,7 @@ Each fix was applied to the real shift at the time shown and replayed to 01:02.
 
 | Fix | From | Parcel-min recovered | Share of loss | Cost | Replay |
 |---|---|---|---|---|---|
-| send chute C289's destination to C269 while it is jammed | 00:30 | 5162 ± 372 | 83 % | sort-plan change | [X2] |
+| send chute C289's destination to C269 from the jam on (never undone) | 00:30 | 5162 ± 372 | 83 % | sort-plan change | [X2] |
 | clear failed robots off loading points within 1 min (now 5 min) | 00:30 | 1731 ± 399 | 28 % | floor procedure | [X1] |
 | allow 8 robots inbound per station (now 6) | 00:30 | 775 ± 376 | 13 % | dispatch setting | [X4] |
 | release 10 spare robots at the first fault | 00:30 | 118 ± 446 (within noise) | 2 % | 10 robots | [X3] |
@@ -73,7 +74,7 @@ Each fix was applied to the real shift at the time shown and replayed to 01:02.
 | Action | Type | Expected effect | Owner | Source |
 |---|---|---|---|---|
 | Reduce the frequency or duration of: chute C289 jams | prevent | up to 5076 ± 356 parcel-min | site ops | [R1] |
-| Send chute C289's destination to C269 while it is jammed | mitigate | 5162 ± 372 parcel-min | site ops | [X2] |
+| Send chute C289's destination to C269 from the jam on (never undone) | mitigate | 5162 ± 372 parcel-min | site ops | [X2] |
 | Clear failed robots off loading points within 1 min (now 5 min) | mitigate | 1731 ± 399 parcel-min | site ops | [X1] |
 
 ## Timeline
@@ -96,7 +97,7 @@ Each fix was applied to the real shift at the time shown and replayed to 01:02.
 ## Method and confidence
 
 - **Counterfactual replay.** The shift was re-run with each combination of causes removed, resuming from the last 5-minute checkpoint before the earliest removed cause, and scored at 01:02 as net parcel-minutes of delay against the fault-free twin (same seed, same parcels). Shapley values are exact over all subsets, in integer arithmetic, so the shares add up exactly to the recovered loss.
-- **Noise.** Robot paths diverge after any small change, so every replay ran on 8 histories: the real one, and 7 copies (of 15 tried) in which one moving robot (R79, R120, R142, R172, R6, R25, R34) paused for a single tick at 00:30 and the shift diverged. Values are medians across histories; ± is half their range. Two values that differ by less than twice that band are reported as a tie.
+- **Noise.** Robot paths diverge after any small change, so every replay ran on 8 histories: the real one, and 7 copies (of 15 tried) in which one moving robot (R79, R120, R142, R172, R6, R25, R34) paused for a single tick at 00:30 and the shift diverged. The headline delay and late count are the real history's; every other value is the median across histories; ± is half their range. Two values that differ by less than twice that band are reported as a tie.
 - **Detection** uses the twin's Poisson noise as the scale. h = 3 is 3.0 times the largest CUSUM value (1.0) seen in 160 simulated hours of fault-free runs whose robot paths were perturbed.
 
 ## Appendix: replay index

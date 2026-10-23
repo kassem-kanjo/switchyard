@@ -4,15 +4,16 @@
 
 ## Summary
 
-From 00:30 sorted throughput fell up to 30 % below the fault-free twin. By 01:01 the incident had cost **2292 parcel-minutes** of delay, and 0 parcels were more than 10 min late [R0].
-Aisle blocked (98 cells) (F0) explains 100 % ± 25 % (2297 parcel-min) [R0–R1]. -5 parcel-min (-0 %) is not explained by removing these causes [R1].
+From 00:30 sorted throughput fell up to 30 % below the fault-free twin. By 01:01 the incident had cost **2428 parcel-minutes** of delay, and 0 parcels were more than 10 min late [R0].
+Aisle blocked (98 cells) (F0) explains 100 % ± 25 % (2297 parcel-min) [R0–R1]. -5 parcel-min (-0 %) of the 2292 parcel-min median loss across the 8 histories (the figure the shares divide) is not explained by removing these causes [R1].
 
 ## Impact
 
 | Measure | Value | Source |
 |---|---|---|
-| Delay at 01:01 vs the fault-free twin | 2292 parcel-min (± 576) | [R0] |
-| Parcels more than 10 min late (whole run) | 0 | [A, T] |
+| Delay at 01:01 vs the fault-free twin | 2428 parcel-min (± 576) | [R0] |
+| Parcels more than 10 min late at 01:01 | 0 | [R0] |
+| Parcels more than 10 min late (whole run, to 02:00) | 0 | [A, T] |
 | Peak backlog | 261 parcels (twin 91) | [A, T] |
 | Worst minute / time to recover | 30 % below the twin / 20 min | [A, T] |
 | Stations / chutes out of action at once | 0 / 0 | [A] |
@@ -24,13 +25,13 @@ Each cause was removed in every combination and the shift replayed (exact Shaple
 
 | # | Condition | Shapley (parcel-min) | Share | Alone | Last | Responsibility | Replays |
 |---|---|---|---|---|---|---|---|
-| 1 | aisle blocked (98 cells) (F0) | 2297 ± 579 | 100 % ± 25 % | 2297 | 2297 | 0 (possibly 1) | [R1, R0] |
+| 1 | aisle blocked (98 cells) (F0) | 2297 ± 579 | 100 % ± 25 % | 2297 | 2297 | 1 | [R1, R0] |
 
 Shapley values and shares are computed from every replay [R0–R1]; *Alone* and *Last* come from the two replays in the last column.
 
 Interactions: none beyond the noise; the causes add up independently.
 
-Near misses (within the noise of the 90 % threshold, so possibly just as sufficient): {F0} [R1].
+Smallest set of causes whose removal recovers at least 90 % of the recoverable loss (judged against the ± 576 parcel-min noise): {F0} [R1].
 
 ## Capacity hotspots (a different question)
 
@@ -80,7 +81,7 @@ Each fix was applied to the real shift at the time shown and replayed to 01:01.
 ## Method and confidence
 
 - **Counterfactual replay.** The shift was re-run with each combination of causes removed, resuming from the last 5-minute checkpoint before the earliest removed cause, and scored at 01:01 as net parcel-minutes of delay against the fault-free twin (same seed, same parcels). Shapley values are exact over all subsets, in integer arithmetic, so the shares add up exactly to the recovered loss.
-- **Noise.** Robot paths diverge after any small change, so every replay ran on 8 histories: the real one, and 7 copies (of 12 tried) in which one moving robot (R100, R120, R172, R6, R11, R13, R25) paused for a single tick at 00:30 and the shift diverged. Values are medians across histories; ± is half their range. Two values that differ by less than twice that band are reported as a tie.
+- **Noise.** Robot paths diverge after any small change, so every replay ran on 8 histories: the real one, and 7 copies (of 12 tried) in which one moving robot (R100, R120, R172, R6, R11, R13, R25) paused for a single tick at 00:30 and the shift diverged. The headline delay and late count are the real history's; every other value is the median across histories; ± is half their range. Two values that differ by less than twice that band are reported as a tie.
 - **Detection** uses the twin's Poisson noise as the scale. h = 3 is 3.0 times the largest CUSUM value (1.0) seen in 160 simulated hours of fault-free runs whose robot paths were perturbed.
 
 ## Appendix: replay index

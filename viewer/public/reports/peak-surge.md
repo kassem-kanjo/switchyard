@@ -4,8 +4,8 @@
 
 ## Summary
 
-From 00:30 sorted throughput fell up to 34 % below the fault-free twin. By 01:10 the incident had cost **7865 parcel-minutes** of delay, and 0 parcels were more than 10 min late [R0].
-Volume surge x2.0 at all stations (F0) explains 100 % ± 4 % (7869 parcel-min) [R0–R1]. -4 parcel-min (-0 %) is not explained by removing these causes [R1].
+From 00:30 sorted throughput fell up to 34 % below the fault-free twin. By 01:10 the incident had cost **7734 parcel-minutes** of delay, and 0 parcels were more than 10 min late [R0].
+Volume surge x2.0 at all stations (F0) explains 100 % ± 4 % (7869 parcel-min) [R0–R1]. -4 parcel-min (-0 %) of the 7865 parcel-min median loss across the 8 histories (the figure the shares divide) is not explained by removing these causes [R1].
 
 Best fix: **allow 8 robots inbound per station (now 6)** would have recovered 6531 parcel-min (83 % of the loss) [X2].
 
@@ -13,8 +13,9 @@ Best fix: **allow 8 robots inbound per station (now 6)** would have recovered 65
 
 | Measure | Value | Source |
 |---|---|---|
-| Delay at 01:10 vs the fault-free twin | 7865 parcel-min (± 303) | [R0] |
-| Parcels more than 10 min late (whole run) | 0 | [A, T] |
+| Delay at 01:10 vs the fault-free twin | 7734 parcel-min (± 303) | [R0] |
+| Parcels more than 10 min late at 01:10 | 0 | [R0] |
+| Parcels more than 10 min late (whole run, to 02:00) | 0 | [A, T] |
 | Peak backlog | 807 parcels (twin 91) | [A, T] |
 | Worst minute / time to recover | 34 % below the twin / 24 min | [A, T] |
 | Stations / chutes out of action at once | 0 / 0 | [A] |
@@ -83,7 +84,7 @@ Each fix was applied to the real shift at the time shown and replayed to 01:10.
 ## Method and confidence
 
 - **Counterfactual replay.** The shift was re-run with each combination of causes removed, resuming from the last 5-minute checkpoint before the earliest removed cause, and scored at 01:10 as net parcel-minutes of delay against the fault-free twin (same seed, same parcels). Shapley values are exact over all subsets, in integer arithmetic, so the shares add up exactly to the recovered loss.
-- **Noise.** Robot paths diverge after any small change, so every replay ran on 8 histories: the real one, and 7 copies (of 9 tried) in which one moving robot (R14, R100, R120, R142, R172, R6, R10) paused for a single tick at 00:30 and the shift diverged. Values are medians across histories; ± is half their range. Two values that differ by less than twice that band are reported as a tie.
+- **Noise.** Robot paths diverge after any small change, so every replay ran on 8 histories: the real one, and 7 copies (of 9 tried) in which one moving robot (R14, R100, R120, R142, R172, R6, R10) paused for a single tick at 00:30 and the shift diverged. The headline delay and late count are the real history's; every other value is the median across histories; ± is half their range. Two values that differ by less than twice that band are reported as a tie.
 - **Detection** uses the twin's Poisson noise as the scale. h = 3 is 3.0 times the largest CUSUM value (1.0) seen in 160 simulated hours of fault-free runs whose robot paths were perturbed.
 
 ## Appendix: replay index
