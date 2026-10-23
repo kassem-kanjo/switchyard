@@ -4,7 +4,8 @@
 
 ## Now
 - **V1 tagged `v1.0.0`** (CEO review package: `docs/reviews/v1.md`). CP1-CP3 merged, the V1 depth work (#25, #18) and the security fixes (#11, #28) merged.
-- Waiting on the CEO: V1 review, licence choice, first piece topic (#26).
+- **Launch prep done (2026-10-23):** 3-page paper `docs/paper/switchyard-v1.pdf` (PR #30, awaiting Kassem's read). Launch kit outside the repo in `../switchyard-launch/` (LAUNCH.md with the X thread, LinkedIn post and HN copy; 4 cards; demo.mp4 47 s; demo.gif; 3 stills).
+- Waiting on the CEO: approve the paper, the licence (MIT or source-available), then flip the repo public and post.
 
 ## Next (milestone V2: design, UX, sellability, launch)
 1. #26 first thought piece (with Kassem).
