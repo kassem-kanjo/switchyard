@@ -8,18 +8,18 @@
   html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body { font-family: Cambria, Georgia, serif; font-size: 10.3pt; line-height: 1.42; color: #1c1c1c; margin: 0; background: #fff; }
   h1 { font-size: 20pt; line-height: 1.15; margin: 0 0 4pt; font-weight: 700; letter-spacing: -0.3pt; }
-  .sub { font-size: 11.5pt; color: #3a3a3a; margin: 0 0 6pt; }
-  .meta { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 9pt; color: #6b6b6b; margin: 0 0 12pt; letter-spacing: 0.2pt; }
-  .tldr { font-size: 10pt; background: #f2f5f9; border-left: 3pt solid #1f4e79; padding: 7pt 10pt; margin: 0 0 10pt; }
-  .tldr b { font-family: Calibri, "Segoe UI", Arial, sans-serif; color: #1f4e79; letter-spacing: 0.3pt; }
-  h2 { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 12pt; margin: 11pt 0 3pt; font-weight: 700; color: #1f4e79; }
+  .sub { font-size: 11.5pt; color: #1c1c1c; font-style: italic; margin: 0 0 6pt; }
+  .meta { font-size: 9.5pt; color: #1c1c1c; margin: 0 0 12pt; }
+  .tldr { font-size: 10pt; margin: 0 0 10pt; padding: 6pt 0; border-top: 0.5pt solid #1c1c1c; border-bottom: 0.5pt solid #1c1c1c; }
+  .tldr b { font-variant: small-caps; letter-spacing: 0.3pt; }
+  h2 { font-size: 12pt; margin: 11pt 0 3pt; font-weight: 700; color: #1c1c1c; }
   p { margin: 0 0 5pt; }
   figure { margin: 8pt 0 9pt; break-inside: avoid; }
   figure svg { display: block; margin: 0 auto; }
-  figcaption { font-size: 8.8pt; line-height: 1.35; color: #444; margin: 4pt 6pt 0; }
+  figcaption { font-size: 8.8pt; line-height: 1.35; color: #1c1c1c; margin: 4pt 6pt 0; }
   ul { margin: 2pt 0 6pt; padding-left: 14pt; }
   li { margin-bottom: 3pt; }
-  .refs { font-size: 8.2pt; line-height: 1.3; color: #555; margin-top: 8pt; border-top: 0.5pt solid #ccc; padding-top: 4pt; }
+  .refs { font-size: 8.2pt; line-height: 1.3; color: #1c1c1c; margin-top: 8pt; border-top: 0.5pt solid #ccc; padding-top: 4pt; }
   .refs p { margin: 0 0 1.5pt; }
   svg text { font-family: Calibri, "Segoe UI", Arial, sans-serif; }
 </style>
@@ -28,9 +28,9 @@
 
 <h1>Replaying the Shift</h1>
 <p class="sub">How to find out what really broke a robotic sort floor, and what it cost</p>
-<p class="meta">KASSEM KANJO &nbsp;·&nbsp; OCTOBER 2026 &nbsp;·&nbsp; SWITCHYARD v1.0</p>
+<p class="meta">Kassem Kanjo &nbsp;·&nbsp; October 2026 &nbsp;·&nbsp; Switchyard v1.0</p>
 
-<div class="tldr"><b>IN SHORT</b>&nbsp; When a sort hub suddenly loses a third of its throughput, nobody can say for sure what caused it or what each problem cost. I built a digital twin of a robot sort floor that answers that by <i>replaying the shift</i>: it re-runs the same day with each problem removed and measures the difference. It names the right cause in 24 of 24 planted incidents and 44 of 48 hard ones, says “we can’t tell” when it can’t, and it exposed a common mistake that makes bad fixes look good.</div>
+<div class="tldr"><b>In short.</b>&nbsp; When a sort hub suddenly loses a third of its throughput, nobody can say for sure what caused it or what each problem cost. I built a digital twin of a robot sort floor that answers that by <i>replaying the shift</i>: it re-runs the same day with each problem removed and measures the difference. It names the right cause in 24 of 24 planted incidents and 44 of 48 hard ones, says “we can’t tell” when it can’t, and it exposed a common mistake that makes bad fixes look good.</div>
 
 <h2>The problem</h2>
 <p>A modern hub runs a few hundred robots carrying parcels from induction stations to chutes. When something breaks, a robot dies in an aisle or a chute jams, the damage doesn’t stay where it happened. It spreads as traffic through robots that never failed. By the time the throughput chart drops, the alarm points at the symptom. When two or three things go wrong in the same ten minutes, which is normal on a busy shift, nobody can say how much each one cost. So the fix that gets funded is whoever argues best in the meeting.</p>
