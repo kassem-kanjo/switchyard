@@ -3,6 +3,7 @@
 
 use switchyard_core::faults::FaultKind;
 
+use super::candidates::Fix;
 use super::report::thousands;
 use super::{PostMortem, significant};
 use crate::metrics::TICKS_PER_MINUTE;
@@ -84,38 +85,33 @@ fn parcel_minutes(parcel_ticks: i64) -> i64 {
     ticks_to_minutes(parcel_ticks as f64).round() as i64
 }
 
-impl PostMortem {
-    /// Fix `i` as a short plain phrase ("Rerouting C289's parcels to C269").
-    fn fix_phrase(&self, i: usize) -> String {
-        use switchyard_core::interventions::Intervention;
-        let fix = &self.fixes[i];
-        match fix.interventions.as_slice() {
-            [Intervention::RemapDestination { chute: to, .. }, ..] => {
-                let from = self.candidates.iter().find_map(|c| match c.spec.kind {
-                    FaultKind::ChuteJam { chute } if c.spec.at == fix.at => Some(chute),
-                    _ => None,
-                });
-                from.map_or_else(
-                    || format!("Rerouting the jammed chute's parcels to {to}"),
-                    |f| format!("Rerouting {f}'s parcels to {to}"),
-                )
-            }
-            [Intervention::ClearAfter { ticks }] => {
-                format!(
-                    "Clearing dead robots within {}",
-                    super::candidates::minutes(*ticks)
-                )
-            }
-            [Intervention::SetStationCap { cap, .. }] => {
-                format!("Allowing {cap} robots per station")
-            }
-            [Intervention::AddRobots { robots, .. }] => {
-                format!("Adding {robots} spare robots")
-            }
-            _ => "Applying the best fix".to_owned(),
+/// A fix as a short plain phrase ("Rerouting C289's parcels to C269").
+fn fix_phrase(fix: &Fix) -> String {
+    use switchyard_core::interventions::Intervention;
+    match fix.interventions.as_slice() {
+        // The fix records its source chute: two jams can start on the same
+        // tick, so the source cannot be inferred from the candidates.
+        [Intervention::RemapDestination { chute: to, .. }, ..] => fix.from_chute.map_or_else(
+            || format!("Rerouting the jammed chute's parcels to {to}"),
+            |f| format!("Rerouting {f}'s parcels to {to}"),
+        ),
+        [Intervention::ClearAfter { ticks }] => {
+            format!(
+                "Clearing dead robots within {}",
+                super::candidates::minutes(*ticks)
+            )
         }
+        [Intervention::SetStationCap { cap, .. }] => {
+            format!("Allowing {cap} robots per station")
+        }
+        [Intervention::AddRobots { robots, .. }] => {
+            format!("Adding {robots} spare robots")
+        }
+        _ => "Applying the best fix".to_owned(),
     }
+}
 
+impl PostMortem {
     /// The one-glance summary; `None` when no incident was detected.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
@@ -173,7 +169,7 @@ impl PostMortem {
             .find(|&(_, g, _)| g > 0)
             .map(|(i, g, b)| FixHeadline {
                 label: self.fixes[i].label.clone(),
-                phrase: self.fix_phrase(i),
+                phrase: fix_phrase(&self.fixes[i]),
                 recovered_parcel_min: parcel_minutes(g),
                 recovery_pct: 100.0 * g as f64 / loss.max(1) as f64,
                 within_noise: !significant(g as f64, b),
@@ -311,6 +307,27 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn remap_phrase_names_the_fix_own_source_chute() {
+        use switchyard_core::ids::DestinationId;
+        use switchyard_core::interventions::Intervention;
+        // Two jams on the same tick: the phrase must follow the fix, not the
+        // first jam candidate that happens to share its start tick.
+        let fix = |from: u16, to: u16| Fix {
+            label: String::new(),
+            cost: String::new(),
+            at: 1_200,
+            interventions: vec![Intervention::RemapDestination {
+                destination: DestinationId(0),
+                chute: ChuteId(to),
+            }],
+            hotspot: false,
+            from_chute: Some(ChuteId(from)),
+        };
+        assert_eq!(fix_phrase(&fix(3, 4)), "Rerouting C3's parcels to C4");
+        assert_eq!(fix_phrase(&fix(9, 8)), "Rerouting C9's parcels to C8");
     }
 
     #[test]

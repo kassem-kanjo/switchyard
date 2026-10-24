@@ -69,6 +69,9 @@ pub struct Fix {
     pub interventions: Vec<Intervention>,
     /// True for a hotspot's relax-capacity test.
     pub hotspot: bool,
+    /// For a remap fix, the chute whose destinations it moves (the headline
+    /// names it; two jams can start on the same tick, so it is not inferable).
+    pub from_chute: Option<ChuteId>,
 }
 
 /// Blame read from the actual run's events, counted per event as the run
@@ -202,6 +205,7 @@ pub fn fixes_and_hotspots(
             at: first,
             interventions: vec![Intervention::ClearAfter { ticks: target }],
             hotspot: false,
+            from_chute: None,
         });
     }
     for c in candidates {
@@ -221,6 +225,7 @@ pub fn fixes_and_hotspots(
                 at: c.spec.at,
                 interventions: remaps,
                 hotspot: false,
+                from_chute: Some(chute),
             });
         }
     }
@@ -235,6 +240,7 @@ pub fn fixes_and_hotspots(
             at: onset,
         }],
         hotspot: false,
+        from_chute: None,
     });
     let cap = cfg.fleet.max_inbound_per_station;
     fixes.push(Fix {
@@ -246,6 +252,7 @@ pub fn fixes_and_hotspots(
             cap: cap + 2,
         }],
         hotspot: false,
+        from_chute: None,
     });
 
     let mut hotspots = Vec::new();
@@ -267,6 +274,7 @@ pub fn fixes_and_hotspots(
                 at: window_start,
                 interventions: remaps,
                 hotspot: true,
+                from_chute: Some(c),
             });
             fixes.len() - 1
         });
