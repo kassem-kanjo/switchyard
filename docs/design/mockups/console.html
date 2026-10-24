@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Switchyard: operations console (mockup)</title>
+<style>
+:root{--bg:#1C2127;--panel:#252A31;--raised:#2F343C;--border:#383E47;--border2:#404854;--text:#F6F7F9;--muted:#ABB3BF;--accent:#2D72D2;--danger:#CD4246;--warn:#C87619;--ok:#238551;--mono:ui-monospace,Consolas,"Cascadia Mono",monospace}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.app{display:grid;grid-template-rows:44px 1fr 132px;grid-template-columns:248px 1fr 420px;height:100vh}
+.top{grid-column:1/4;display:flex;align-items:center;gap:18px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--border)}
+.brand{font-weight:700;letter-spacing:1.2px;font-size:12px}.sep{width:1px;height:20px;background:var(--border)}
+.sel{background:var(--raised);border:1px solid var(--border2);border-radius:2px;padding:4px 9px;color:var(--text);font-size:12px}
+.lbl{font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.chip{font-size:11px;letter-spacing:.4px;padding:3px 8px;border-radius:2px;font-weight:600}
+.chip.d{background:rgba(205,66,70,.18);color:#FA999C;border:1px solid rgba(205,66,70,.5)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.ctl{display:flex;gap:4px}.ctl button{background:var(--raised);border:1px solid var(--border2);color:var(--text);border-radius:2px;padding:3px 9px;font-size:12px;cursor:pointer}.ctl button.on{background:var(--accent);border-color:var(--accent)}
+.rail{background:var(--panel);border-right:1px solid var(--border);overflow:auto}
+.rail h3{margin:0;padding:12px 14px 6px}.item{padding:9px 14px;border-left:3px solid transparent;cursor:pointer;border-bottom:1px solid var(--border)}
+.item:hover{background:var(--raised)}.item.active{background:var(--raised);border-left-color:var(--accent)}
+.item .t{font-weight:600}.item .s{color:var(--muted);font-size:12px}.id{font-family:var(--mono);color:var(--muted);font-size:11px;margin-right:6px}
+.bar{height:4px;background:var(--border);margin-top:6px;border-radius:1px}.bar i{display:block;height:4px;border-radius:1px}
+.canvas{position:relative;overflow:hidden;background:#161A1F}
+.canvas .hud{position:absolute;left:12px;top:10px;display:flex;gap:8px}
+.legend{position:absolute;left:12px;bottom:10px;display:flex;gap:14px;font-size:11.5px;color:var(--muted);background:rgba(28,33,39,.85);padding:6px 10px;border:1px solid var(--border);border-radius:2px}
+.legend i{display:inline-block;width:9px;height:9px;margin-right:5px;vertical-align:-1px;border-radius:1px}
+.insp{background:var(--panel);border-left:1px solid var(--border);overflow:auto}
+.ih{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.card{margin:14px 16px;padding:14px 16px;background:var(--raised);border:1px solid var(--border2);border-radius:2px}
+.head{font-size:19px;font-weight:600;line-height:1.3;margin:6px 0 4px}.head b{color:#FA999C;font-weight:600}
+.sub{font-size:15px;line-height:1.35;color:var(--text)}.sub b{color:#72CA9B;font-weight:600}
+.kpis{display:flex;gap:26px;margin:14px 0 10px}.kpi .v{font-size:28px;font-weight:600;font-family:var(--mono);letter-spacing:-.5px}.kpi .k{font-size:11px;color:var(--muted)}
+.how{font-size:11.5px;color:var(--muted)}.how a{color:#8ABBFF;text-decoration:none}
+.secs{margin:0 16px 16px;border:1px solid var(--border);border-radius:2px}
+.sec{border-top:1px solid var(--border)}.sec:first-child{border-top:0}
+.sec summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:10px 12px}
+.sec summary::-webkit-details-marker{display:none}.sec summary .lbl{color:var(--text)}.sec summary .tz{color:var(--muted);font-size:12px}
+.sec[open] summary{background:#2A2F37}.sec .body{padding:6px 12px 12px}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}th{font-weight:500;color:var(--muted);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase}
+td.n{text-align:right;font-family:var(--mono)}
+.tl{grid-column:1/4;background:var(--panel);border-top:1px solid var(--border);padding:8px 14px 10px;position:relative}
+.obj{display:none}.obj.show{display:block}
+</style></head><body>
+<div class="app">
+  <div class="top">
+    <span class="brand">SWITCHYARD</span><span class="sep"></span>
+    <span class="lbl">Site</span><span class="sel">Hub A · 200 robots ▾</span>
+    <span class="lbl">Scenario</span><span class="sel">Chute jam + two robot failures ▾</span>
+    <span class="sep"></span>
+    <div class="ctl"><button>❚❚</button><button class="on">1×</button><button>4×</button><button>16×</button><button>64×</button></div>
+    <span style="margin-left:auto" class="chip d">INCIDENT · 00:30–00:52</span>
+    <span class="lbl">Throughput</span><span class="mono">5,736/h</span><span class="mono" style="color:#FA999C">−47 %</span>
+    <span class="lbl">Shift time</span><span class="mono">00:41:12</span>
+  </div>
+
+  <div class="rail">
+    <h3 class="lbl">Incidents</h3>
+    <div class="item active" data-o="inc"><div class="t">Throughput drop</div><div class="s"><span class="mono">00:30–00:52</span> · 3 causes · 110 parcels late</div></div>
+    <h3 class="lbl">Causes</h3>
+    <div class="item" data-o="f0"><div class="t"><span class="id">F0</span>Chute C289 jammed</div><div class="s">00:30 · 70 % of the delay</div><div class="bar"><i style="width:70%;background:var(--danger)"></i></div></div>
+    <div class="item" data-o="f2"><div class="t"><span class="id">F2</span>Robot R119 broke down</div><div class="s">00:30 · 15 %</div><div class="bar"><i style="width:15%;background:var(--danger)"></i></div></div>
+    <div class="item" data-o="f1"><div class="t"><span class="id">F1</span>Robot R57 broke down</div><div class="s">00:30 · 15 % · tied with R119</div><div class="bar"><i style="width:15%;background:var(--danger)"></i></div></div>
+    <h3 class="lbl">Fixes tested</h3>
+    <div class="item" data-o="x2"><div class="t">Reroute C289 to C269</div><div class="s">would save 83 %</div><div class="bar"><i style="width:83%;background:var(--ok)"></i></div></div>
+    <div class="item" data-o="x1"><div class="t">Clear dead robots in 1 min</div><div class="s">would save 28 %</div><div class="bar"><i style="width:28%;background:var(--ok)"></i></div></div>
+    <div class="item" data-o="x3"><div class="t">Add 10 spare robots</div><div class="s">no measurable effect</div><div class="bar"><i style="width:2%;background:var(--muted)"></i></div></div>
+  </div>
+
+  <div class="canvas">
+    <svg id="floor" width="100%" height="100%" viewBox="0 0 760 520" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="hud"><span class="chip d" id="hud">Focus: incident area</span></div>
+    <div class="legend"><span><i style="background:#F6F7F9"></i>Carrying a parcel</span><span><i style="background:#2D72D2"></i>Heading to pick up</span><span><i style="background:#CD4246"></i>Broken down</span><span><i style="background:#C87619"></i>Chute</span><span><i style="background:#238551"></i>Pick-up station</span></div>
+  </div>
+
+  <div class="insp">
+    <div class="obj show" id="o-inc">
+      <div class="ih"><span class="lbl">Inspector · Incident</span><span class="mono" style="color:var(--muted);font-size:11px">00:30–00:52</span></div>
+      <div class="card">
+        <div class="lbl">Throughput fell 47 % below normal</div>
+        <div class="head"><b>The C289 jam</b> caused 70 % of the delay.</div>
+        <div class="sub"><b>Rerouting C289's parcels to C269</b> would have saved 83 %.</div>
+        <div class="kpis"><div class="kpi"><div class="v">6,264</div><div class="k">parcel-minutes of delay</div></div><div class="kpi"><div class="v">110</div><div class="k">parcels late</div></div><div class="kpi"><div class="v">83 %</div><div class="k">recoverable</div></div></div>
+        <div class="how">Proven by re-running this shift 96 times · error bars from 8 versions of the day · <a href="#">How we know ▸</a></div>
+      </div>
+      <div class="secs">
+        <details class="sec" open><summary><span class="lbl">Causes</span><span class="tz">3 · two are tied</span></summary><div class="body"><table><tr><th>Cause</th><th style="text-align:right">Share</th><th style="text-align:right">Parcel-min</th></tr><tr><td>Chute C289 jammed</td><td class="n">70 % ± 3</td><td class="n">4,329</td></tr><tr><td>Robot R119 broke down</td><td class="n">15 % ± 1</td><td class="n">947</td></tr><tr><td>Robot R57 broke down <span style="color:var(--muted)">(tie)</span></td><td class="n">15 % ± 2</td><td class="n">921</td></tr></table></div></details>
+        <details class="sec"><summary><span class="lbl">Fixes tested</span><span class="tz">4 tested · best 83 %</span></summary><div class="body"><table><tr><td>Reroute C289 to C269</td><td class="n">5,162</td><td class="n">83 %</td></tr><tr><td>Clear dead robots in 1 min</td><td class="n">1,731</td><td class="n">28 %</td></tr><tr><td>8 robots per station</td><td class="n">775</td><td class="n">13 %</td></tr><tr><td>Add 10 spare robots</td><td class="n" style="color:var(--muted)">118 ± 446</td><td class="n" style="color:var(--muted)">noise</td></tr></table></div></details>
+        <details class="sec"><summary><span class="lbl">Impact</span><span class="tz">596 peak backlog · 15 min to recover</span></summary><div class="body" style="color:var(--muted)">Peak backlog 596 parcels (normal 91). Worst minute 47 % below normal. 2 stations and 1 chute out at once.</div></details>
+        <details class="sec"><summary><span class="lbl">How the causes interacted</span><span class="tz">the jam made each failure worse</span></summary><div class="body" style="color:var(--muted)">The jam and R57 together did 901 parcel-minutes more damage than apart; the jam and R119, 549 more.</div></details>
+        <details class="sec"><summary><span class="lbl">Method</span><span class="tz">re-runs, error bars, settings</span></summary><div class="body" style="color:var(--muted)">Each combination of causes was removed and the shift re-run from the last checkpoint. Blame is split with Shapley values. Error bars come from 8 equally plausible versions of the day.</div></details>
+      </div>
+    </div>
+    <div class="obj" id="o-f0"><div class="ih"><span class="lbl">Inspector · Cause F0</span></div><div class="card"><div class="head"><b>Chute C289 jammed</b> at 00:30 for 15 min.</div><div class="sub">It caused 70 % ± 3 of the delay: 4,329 parcel-minutes.</div><div class="kpis"><div class="kpi"><div class="v">70 %</div><div class="k">share</div></div><div class="kpi"><div class="v">5,076</div><div class="k">saved if removed alone</div></div></div><div class="how">Removing it alone recovers 5,076 parcel-min · together with each robot failure it did extra damage</div></div></div>
+    <div class="obj" id="o-f2"><div class="ih"><span class="lbl">Inspector · Cause F2</span></div><div class="card"><div class="head"><b>Robot R119</b> broke down on a loading point at 00:30.</div><div class="sub">15 % ± 1 of the delay (947 parcel-minutes). Tied with R57: too close to rank.</div></div></div>
+    <div class="obj" id="o-f1"><div class="ih"><span class="lbl">Inspector · Cause F1</span></div><div class="card"><div class="head"><b>Robot R57</b> broke down at 00:30.</div><div class="sub">15 % ± 2 of the delay (921 parcel-minutes). Tied with R119.</div></div></div>
+    <div class="obj" id="o-x2"><div class="ih"><span class="lbl">Inspector · Fix</span></div><div class="card"><div class="head">Reroute C289's parcels to C269</div><div class="sub"><b>Saves 83 %</b> of the delay (5,162 ± 372 parcel-minutes). Cost: a sort-plan change.</div></div></div>
+    <div class="obj" id="o-x1"><div class="ih"><span class="lbl">Inspector · Fix</span></div><div class="card"><div class="head">Clear dead robots within 1 minute (now 5)</div><div class="sub"><b>Saves 28 %</b> (1,731 ± 399 parcel-minutes). Cost: a floor procedure.</div></div></div>
+    <div class="obj" id="o-x3"><div class="ih"><span class="lbl">Inspector · Fix</span></div><div class="card"><div class="head">Add 10 spare robots</div><div class="sub">No measurable effect: 118 ± 446 parcel-minutes is inside the noise. The bottleneck was the chute, not the fleet.</div></div></div>
+  </div>
+
+  <div class="tl">
+    <div style="display:flex;justify-content:space-between"><span class="lbl">Timeline · throughput vs normal</span><span class="lbl">drag to scrub</span></div>
+    <svg width="100%" height="100" viewBox="0 0 1400 100" preserveAspectRatio="none" id="tl"></svg>
+  </div>
+</div>
+<script>
+// Illustrative floor (layout and marks only); all numbers in the panels come from the real v1.0 run.
+const S=document.getElementById('floor'),ns='http://www.w3.org/2000/svg';
+const R=(x,y,w,h,f,o={})=>{const r=document.createElementNS(ns,'rect');Object.entries({x,y,width:w,height:h,fill:f,...o}).forEach(([k,v])=>r.setAttribute(k,v));S.appendChild(r);return r};
+R(0,0,760,520,'#1C2127');
+for(let y=0;y<13;y++)for(let x=0;x<19;x++){R(20+x*38,20+y*36,34,32,'#222830')}
+const chutes=[];for(let y=1;y<12;y+=2)for(let x=1;x<18;x+=2){chutes.push([x,y]);R(20+x*38+9,20+y*36+8,16,16,'#C87619',{opacity:.75,rx:1})}
+const jam=[9,9];R(20+jam[0]*38+5,20+jam[1]*36+4,24,24,'url(#h)',{stroke:'#C87619','stroke-width':2});
+S.insertAdjacentHTML('afterbegin','<defs><pattern id="h" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#3a2a12"/><rect width="2.5" height="6" fill="#C87619"/></pattern><radialGradient id="g"><stop offset="0" stop-color="#CD4246" stop-opacity=".28"/><stop offset="1" stop-color="#CD4246" stop-opacity="0"/></radialGradient></defs>');
+const glow=document.createElementNS(ns,'ellipse');Object.entries({cx:20+9.5*38,cy:20+10*36,rx:190,ry:120,fill:'url(#g)'}).forEach(([k,v])=>glow.setAttribute(k,v));S.appendChild(glow);
+for(let x=1;x<18;x+=3)R(20+x*38+5,20+12*36+4,24,24,'#238551',{rx:1});
+let seed=7;const rnd=()=>((seed=seed*16807%2147483647)/2147483647);
+for(let i=0;i<70;i++){const x=Math.floor(rnd()*19),y=Math.floor(rnd()*12);const near=Math.hypot(x-9.5,y-10)<4;const c=rnd()<.55?'#F6F7F9':'#2D72D2';if(near||rnd()<.6)R(20+x*38+11,20+y*36+10,12,12,c,{rx:1})}
+for(let i=0;i<26;i++){const x=7+Math.floor(rnd()*6),y=8+Math.floor(rnd()*4);R(20+x*38+11,20+y*36+10,12,12,'#F6F7F9',{rx:1})}
+[[6,12],[12,12]].forEach(([x,y])=>{R(20+x*38+11,20+y*36+10,12,12,'#CD4246',{rx:1});const c=document.createElementNS(ns,'circle');Object.entries({cx:20+x*38+17,cy:20+y*36+16,r:15,fill:'none',stroke:'#CD4246','stroke-width':2}).forEach(([k,v])=>c.setAttribute(k,v));c.innerHTML='<animate attributeName="r" values="12;17;12" dur="1.2s" repeatCount="indefinite"/>';S.appendChild(c)});
+// destination lines for a few carrying robots
+[[5,6,9,9],[13,5,9,9],[3,9,7,3]].forEach(([a,b,c,d])=>{const l=document.createElementNS(ns,'line');Object.entries({x1:20+a*38+17,y1:20+b*36+16,x2:20+c*38+17,y2:20+d*36+16,stroke:'#F6F7F9','stroke-opacity':.25,'stroke-dasharray':'3 4'}).forEach(([k,v])=>l.setAttribute(k,v));S.appendChild(l);R(20+a*38+11,20+b*36+10,12,12,'#F6F7F9',{rx:1})});
+// timeline
+const T=document.getElementById('tl');let p='';const pts=[];for(let i=0;i<=90;i++){const t=i/90;let v=60+Math.sin(i*1.7)*5;if(i>=30&&i<=52){v=60-26*Math.sin(Math.PI*(i-30)/22)}if(i>52&&i<60)v=60+12*Math.sin(Math.PI*(i-52)/8);pts.push([t*1400,100-v])}
+const base=pts.map(([x])=>`${x},40`).join(' ');
+T.innerHTML=`<rect x="${30/90*1400}" y="0" width="${22/90*1400}" height="100" fill="#CD4246" opacity=".12"/>
+<polygon points="${pts.filter((_,i)=>i>=30&&i<=52).map(p=>p.join(',')).join(' ')} ${52/90*1400},40 ${30/90*1400},40" fill="#CD4246" opacity=".3"/>
+<polyline points="${base}" fill="none" stroke="#ABB3BF" stroke-dasharray="5 4" stroke-width="1.5"/>
+<polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#2D72D2" stroke-width="2"/>
+<g font-family="Consolas,monospace" font-size="13" fill="#ABB3BF"><text x="4" y="96">00:00</text><text x="${30/90*1400+4}" y="96" fill="#FA999C">00:30 jam · R57 · R119</text><text x="${52/90*1400+4}" y="96">00:52</text><text x="1350" y="96">01:30</text><text x="${41/90*1400}" y="88" fill="#FA999C">−47 %</text></g>
+<line x1="${41/90*1400}" y1="0" x2="${41/90*1400}" y2="100" stroke="#F6F7F9" stroke-width="1.5"/>`;
+// selection
+document.querySelectorAll('.item').forEach(el=>el.addEventListener('click',()=>{document.querySelectorAll('.item').forEach(i=>i.classList.remove('active'));el.classList.add('active');document.querySelectorAll('.obj').forEach(o=>o.classList.remove('show'));document.getElementById('o-'+el.dataset.o).classList.add('show');document.getElementById('hud').textContent='Focus: '+el.querySelector('.t').innerText.replace(/^F\d/,'').trim()}));
+</script></body></html>
