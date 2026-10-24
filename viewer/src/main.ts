@@ -17,6 +17,7 @@ import { mountTabs } from "./ui/tabs";
 import { pickRobot } from "./ui/pick";
 import { fitToCanvas } from "./renderer/fit";
 import { RobotState } from "./renderer/Renderer";
+import { chuteCells, floorMarks, incidentFrame, jammedCellsOf, type Frame } from "./renderer/floorMarks";
 import { h } from "./ui/dom";
 
 applyThemeVars();
@@ -90,9 +91,30 @@ async function main(): Promise<void> {
   const tracePanel = new TracePanel(panels.trace, services.traces);
   const faultPanel = new FaultPanel(panels.faults, services.faults, () => nowTick);
   new PostmortemPanel(panels.postmortem, services.postmortem, preset);
+  // Floor marks: jammed chutes from the active faults, a glow around failed robots and jams, and the
+  // frame the floor eases to when the Post-mortem tab is open (kept after the incident ends).
+  const chutes = chuteCells(layout);
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let floorFrame: Frame | null = null;
+  const postmortemTab = document.getElementById("tab-postmortem")!;
+  const applyFrame = () => {
+    const on = postmortemTab.getAttribute("aria-selected") === "true" && floorFrame !== null;
+    canvas.style.transformOrigin = "0 0";
+    canvas.style.transition = reduceMotion ? "none" : "transform 400ms ease";
+    canvas.style.transform = on ? `translate(${floorFrame!.tx}px, ${floorFrame!.ty}px) scale(${floorFrame!.k})` : "none";
+  };
+  new MutationObserver(applyFrame).observe(postmortemTab, { attributes: true, attributeFilter: ["aria-selected"] });
+  const refreshMarks = async () => {
+    const snap = source.snapshot();
+    const marks = floorMarks(layout, snap, jammedCellsOf(await services.faults.active(snap.tick), chutes));
+    renderer.setMarks?.(marks);
+    floorFrame = incidentFrame(marks.glow, layout, canvas.clientWidth, canvas.clientHeight, theme.padding) ?? floorFrame;
+    applyFrame();
+  };
   const refreshSide = () => {
     chart.update(services.metrics.series());
     void faultPanel.refresh();
+    void refreshMarks().catch((err) => console.warn("floor marks unavailable:", err));
   };
   refreshSide();
   setInterval(refreshSide, 1000);
@@ -103,7 +125,10 @@ async function main(): Promise<void> {
     const r = canvas.getBoundingClientRect();
     const fit = fitToCanvas(layout.width, layout.height, canvas.clientWidth, canvas.clientHeight, theme.padding);
     const snap = source.snapshot();
-    const id = pickRobot(snap, fit, e.clientX - r.left, e.clientY - r.top, null);
+    // The canvas may be zoomed by the incident frame: map the click back to canvas pixels.
+    const px = ((e.clientX - r.left) * canvas.clientWidth) / r.width;
+    const py = ((e.clientY - r.top) * canvas.clientHeight) / r.height;
+    const id = pickRobot(snap, fit, px, py, null);
     if (id === null) {
       renderer.highlight([]);
       return;
