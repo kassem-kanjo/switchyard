@@ -24,6 +24,44 @@
 <h1>Switchyard V2: wireframes</h1>
 <p class="lede">Low fidelity on purpose: layout, order and words only. Colour, type and spacing come from <code>docs/design/v2.md</code>. Review these before any build. Numbered yellow notes are decisions to check.</p>
 
+<!-- 0. Console layout (CEO direction 2026-10-24) -->
+<div class="frame">
+  <div class="label"><b>0 · Operations console (the main layout; supersedes the two-pane layout in frames 2-3)</b><span>1440 × 900 · Palantir-style: object rail, canvas, inspector, timeline</span></div>
+  <div class="box" style="margin:0;border:0;border-bottom:1.2px solid #555;display:flex;gap:18px;align-items:center;font-size:12px">
+    <b>SWITCHYARD</b><span class="muted">Site: Hub A (medium, 200 robots) ▾</span><span class="muted">Scenario: two-dead-robots-and-a-jam ▾</span><span class="muted">▶ ❚❚ 8×</span>
+    <span style="margin-left:auto" class="btn" style="padding:2px 8px">INCIDENT ACTIVE</span><span class="muted">THROUGHPUT 5,736/h · −47 % vs baseline</span></div>
+  <div class="row" style="height:470px">
+    <div class="col" style="width:230px;border-right:1.2px solid #555">
+      <div class="box" style="margin:0;border:0;border-bottom:1px solid #999;font-size:11px"><b>INCIDENTS</b></div>
+      <div class="box" style="border-left:4px solid #a33">00:30–00:52 · −47 %<br><span class="muted">3 causes · 110 late</span></div>
+      <div class="box" style="margin:0;border:0;border-bottom:1px solid #999;font-size:11px"><b>FAULTS</b></div>
+      <div class="box">F0 · Chute C289 jam<br><span class="muted">00:30 · 70 %</span></div>
+      <div class="box">F2 · Robot R119 down<br><span class="muted">00:30 · 15 %</span></div>
+      <div class="box">F1 · Robot R57 down<br><span class="muted">00:30 · 15 %</span></div>
+      <div class="box" style="margin:0;border:0;border-bottom:1px solid #999;font-size:11px"><b>FIXES TESTED</b></div>
+      <div class="box">Reroute C289 → C269 · 83 %</div>
+      <div class="ann" style="left:250px;top:170px"><span class="num">8</span>Left rail = objects. Clicking one selects it everywhere: the floor highlights it, the timeline marks its span, and the inspector shows its detail.</div>
+    </div>
+    <div class="box x" style="flex:1;margin:0;border:0;display:flex;align-items:center;justify-content:center"><span class="muted">Floor canvas, with the selected object highlighted (rings, hatching) and the camera framing the incident</span></div>
+    <div class="col" style="width:420px;border-left:1.2px solid #555">
+      <div class="box" style="margin:0;border:0;border-bottom:1px solid #999;font-size:11px"><b>INSPECTOR · INCIDENT 00:30–00:52</b></div>
+      <div class="box" style="padding:10px">
+        <div class="h">The C289 jam caused 70 % of the delay.</div>
+        <div>Rerouting C289's parcels to C269 would have saved 83 %.</div>
+        <div class="row" style="gap:20px;margin-top:8px"><div><div class="big" style="font-size:22px">6,264</div><span class="muted">parcel-min</span></div><div><div class="big" style="font-size:22px">110</div><span class="muted">late</span></div><div><div class="big" style="font-size:22px">83 %</div><span class="muted">recoverable</span></div></div>
+        <div class="muted" style="font-size:11px;margin-top:4px">Proven by 96 re-runs of this shift · How we know ▸</div>
+      </div>
+      <div class="box" style="font-size:12px"><div class="sec"><b>CAUSES</b><span>▾</span></div><div class="sec"><span>FIXES</span><span class="muted">4 · best 83 % ▸</span></div><div class="sec"><span>IMPACT</span><span class="muted">▸</span></div><div class="sec"><span>INTERACTIONS</span><span class="muted">▸</span></div><div class="sec"><span>METHOD</span><span class="muted">▸</span></div></div>
+      <div class="ann" style="left:-250px;top:60px"><span class="num">9</span>The inspector shows whatever is selected. For an incident, that's the headline card and the sections. For a robot or a parcel, it's that object's trace and blame chain.</div>
+    </div>
+  </div>
+  <div class="box" style="margin:0;border:0;border-top:1.2px solid #555;height:110px;font-size:11px;position:relative">
+    <b>TIMELINE</b> <span class="muted">00:00 ─────────────── 00:30 ▒▒▒▒▒▒▒▒ 00:52 ─────────── 01:30</span><br>
+    <span class="muted">throughput vs baseline (shaded loss) · F0 ████████ · F1 ███ · F2 ███ · scrub handle ▼</span>
+    <div class="ann" style="left:640px;top:30px"><span class="num">10</span>The timeline is the spine: one span per fault and a shaded loss area. Scrubbing it moves the floor. It replaces the small chart in the sidebar.</div>
+  </div>
+</div>
+
 <!-- 1. First run -->
 <div class="frame">
   <div class="label"><b>1 · First run (empty state)</b><span>1440 × 900 · what anyone sees after <code>switchyard view</code></span></div>
@@ -128,6 +166,8 @@
 <li>One-button first run (frame 1). Is that enough, or do you also want a short intro line about what Switchyard is?</li>
 <li>The glow (frame 2, note 3): build per-cell wait data so it's honest, or drop the glow and keep only the rings and hatching?</li>
 <li>The Root-cause table drops the Replays and Source columns (they move to Method). The spec said keep them; the test graders still parse the table either way.</li>
+<li>Legibility (design §Legibility): 1× = real time, smooth motion, destination lines on carrying robots, and focus mode. Approve.</li>
+<li>Console layout (frame 0): approve the left rail + inspector + timeline as the main layout.</li>
 <li>Dark theme only for V2, or add a light theme for screenshots and print?</li>
 </ol>
 </div></body></html>
