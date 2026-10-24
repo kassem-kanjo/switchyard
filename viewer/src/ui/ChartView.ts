@@ -1,6 +1,6 @@
 import { theme, type Theme } from "../theme";
 import type { MetricsSeries } from "../data/types";
-import { formatReadout, hoverReadout, indexAt, makeScale, tickToIndex, yTicks, type Scale } from "./chartMath";
+import { deepestDip, formatReadout, hoverReadout, indexAt, makeScale, noiseHalfWidth, tickToIndex, yTicks, type Scale } from "./chartMath";
 
 /** Canvas line chart: delivered per minute, dashed twin, shaded fault windows, hover readout. */
 export class ChartView {
@@ -64,16 +64,22 @@ export class ChartView {
     ctx.textBaseline = "middle";
     ctx.textAlign = "right";
     ctx.lineWidth = 1;
+    // Axis labels at tidy ticks; hairlines only at 0 and the twin's mean (design/v2.md, chart).
+    const twinMean = s?.twin && s.twin.length ? s.twin.reduce((a, b) => a + b, 0) / s.twin.length : null;
     for (const v of yTicks(scale.yMax, 2)) {
+      ctx.fillStyle = c.axisText;
+      ctx.fillText(String(Math.round(v)), rect.left - 6, Math.round(scale.y(v)));
+    }
+    const hair = (v: number) => {
       const y = Math.round(scale.y(v)) + 0.5;
       ctx.strokeStyle = c.grid;
       ctx.beginPath();
       ctx.moveTo(rect.left, y);
       ctx.lineTo(rect.left + rect.width, y);
       ctx.stroke();
-      ctx.fillStyle = c.axisText;
-      ctx.fillText(String(Math.round(v)), rect.left - 6, y);
-    }
+    };
+    hair(0);
+    if (twinMean !== null) hair(twinMean);
     if (!s || n === 0) {
       ctx.textAlign = "center";
       ctx.fillStyle = c.axisText;
@@ -87,6 +93,27 @@ export class ChartView {
     ctx.fillText(`min ${s.startMinute}`, rect.left, h - 4);
     ctx.textAlign = "right";
     ctx.fillText(`min ${s.startMinute + n - 1}`, rect.left + rect.width, h - 4);
+
+    const idx = (tick: number) => tickToIndex(tick, s.startMinute, s.ticksPerMinute);
+    const firstFault = s.faults.length ? Math.min(...s.faults.map((f) => idx(f.startTick))) : n;
+    const clipPlot = () => {
+      ctx.beginPath();
+      ctx.rect(rect.left, rect.top, rect.width, rect.height);
+      ctx.clip();
+    };
+    // The twin's noise band: where the real line may sit by chance alone.
+    if (s.twin && s.twin.length > 1) {
+      const hw = noiseHalfWidth(s.delivered, s.twin, firstFault);
+      ctx.save();
+      clipPlot();
+      ctx.fillStyle = c.noiseShade;
+      ctx.beginPath();
+      s.twin.forEach((v, i) => (i === 0 ? ctx.moveTo(scale.x(i), scale.y(v + hw)) : ctx.lineTo(scale.x(i), scale.y(v + hw))));
+      for (let i = s.twin.length - 1; i >= 0; i--) ctx.lineTo(scale.x(i), scale.y(Math.max(0, s.twin[i]! - hw)));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
 
     // Fault windows, clipped to the plot.
     ctx.save();
@@ -104,6 +131,22 @@ export class ChartView {
       ctx.moveTo(x0 + 0.5, rect.top);
       ctx.lineTo(x0 + 0.5, rect.top + rect.height);
       ctx.stroke();
+      // Loss: the area between the twin and the actual line inside the window.
+      if (s.twin) {
+        const i0 = Math.max(0, Math.ceil(idx(f.startTick)));
+        const i1 = Math.min(n - 1, Math.floor(idx(f.endTick)));
+        if (i1 > i0) {
+          ctx.fillStyle = c.lossShade;
+          ctx.beginPath();
+          for (let i = i0; i <= i1; i++) {
+            const y = scale.y(Math.max(s.twin[i] ?? 0, s.delivered[i] ?? 0));
+            i === i0 ? ctx.moveTo(scale.x(i), y) : ctx.lineTo(scale.x(i), y);
+          }
+          for (let i = i1; i >= i0; i--) ctx.lineTo(scale.x(i), scale.y(s.delivered[i] ?? 0));
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
     }
     ctx.restore();
 
@@ -119,6 +162,29 @@ export class ChartView {
     };
     if (s.twin) line(s.twin, c.twin, 1.5, c.twinDash);
     line(s.delivered, c.line, c.lineWidth, []);
+
+    // Annotate the deepest point inside the incident window.
+    if (s.twin && s.faults.length) {
+      const lo = Math.min(...s.faults.map((f) => idx(f.startTick)));
+      const hi = Math.max(...s.faults.map((f) => idx(f.endTick)));
+      const dip = deepestDip(s.delivered, s.twin, lo, hi);
+      if (dip) {
+        const px = scale.x(dip.index);
+        const py = scale.y(s.delivered[dip.index]!);
+        ctx.fillStyle = c.annotation;
+        ctx.beginPath();
+        ctx.arc(px, py, 3, 0, Math.PI * 2);
+        ctx.fill();
+        const label = `−${dip.pct} %`;
+        ctx.font = `600 ${c.font}`;
+        const lw = ctx.measureText(label).width;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        const lx = Math.min(px + 7, rect.left + rect.width - lw);
+        ctx.fillText(label, lx, Math.min(py - 6, rect.top + rect.height - 14));
+        ctx.font = c.font;
+      }
+    }
 
     const hi = this.hover;
     const r = hi === null ? null : hoverReadout(hi, s.startMinute, s.delivered, s.twin);
