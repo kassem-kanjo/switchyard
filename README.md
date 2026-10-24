@@ -10,7 +10,7 @@
 
 When a parcel hub suddenly loses a third of its throughput, nobody can say for sure what caused it or how much each problem cost. Switchyard answers that by **replaying the shift**. It is a deterministic digital twin of a robot sort floor. It re-runs the same day with each problem removed, measures what comes back, and writes the incident post-mortem for you.
 
-📄 **Paper:** [Replaying the Shift](docs/paper/switchyard-v1.pdf) (3 pages: how it works and what it found)
+🎬 **Video:** [Switchyard in 52 seconds](docs/media/switchyard-demo.mp4) &nbsp;·&nbsp; 📄 **Paper:** [Replaying the Shift](docs/paper/switchyard-v1.pdf) (3 pages: how it works and what it found)
 
 ## What it does
 
