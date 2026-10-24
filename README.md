@@ -98,6 +98,22 @@ cd viewer && npm ci && npm run dev
 
 Full setup, including Windows: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
+## How it was built, step by step
+
+Each stage is one reviewed pull request, so the history reads as the roadmap:
+
+| Stage | What it added |
+|---|---|
+| [Discovery](https://github.com/kassem-kanjo/switchyard/pull/1) | Research, product spec, architecture and decision records |
+| [V0](https://github.com/kassem-kanjo/switchyard/pull/2) | Walking skeleton: the sim, the CLI and the viewer, end to end |
+| [CP1](https://github.com/kassem-kanjo/switchyard/pull/3) | A floor that sorts: the guided PIBT planner and floor operations |
+| [CP2](https://github.com/kassem-kanjo/switchyard/pull/4) | Parcel traces with blame chains, the fault catalog, chaos runs and a resilience score |
+| [CP3](https://github.com/kassem-kanjo/switchyard/pull/5) | The post-mortem engine: incident detection, replays, Shapley blame, tested fixes |
+| [V1 depth](https://github.com/kassem-kanjo/switchyard/pull/27), [hardening](https://github.com/kassem-kanjo/switchyard/pull/28) | Per-cause noise bands, the reroute check and the security review |
+| [v1.0.0](https://github.com/kassem-kanjo/switchyard/releases/tag/v1.0.0) | The release, plus the [paper](https://github.com/kassem-kanjo/switchyard/pull/30) |
+
+Each checkpoint went through an independent review; the reports are in [docs/checkpoints](docs/checkpoints/).
+
 ## Repo map
 
 | Path | Contents |
@@ -114,7 +130,7 @@ Full setup, including Windows: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 The floor is simulated, not connected to a real hub yet. The next step is running the same replays on a copy of a real shift from a hub's logs. Small interactions between faults stay inside the noise. Exact Shapley values grow exponentially with the number of causes, so incidents with many causes at once will need sampled attribution.
 
-## How it was built
+## Built with AI
 
 Built by Kassem Kanjo, with a team of AI agents: cheap models wrote well-specified code, stronger models reviewed it, and an independent auditor checked every checkpoint. The audit findings are published in [docs/checkpoints](docs/checkpoints/). The paper has a section on what AI made possible here, and where a human still had to catch it.
 
