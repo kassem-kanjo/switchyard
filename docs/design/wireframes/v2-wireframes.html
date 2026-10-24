@@ -1,0 +1,133 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Switchyard V2 wireframes</title>
+<style>
+  body { margin: 0; background: #f3f3f1; font-family: "Segoe UI", Arial, sans-serif; color: #222; }
+  .sheet { box-sizing: border-box; width: 1400px; margin: 0 auto; padding: 32px 40px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } .lede { margin: 0 0 24px; color: #555; font-size: 14px; }
+  .frame { background: #fff; border: 1.5px solid #333; margin-bottom: 36px; }
+  .label { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 10px; border-bottom: 1.5px solid #333; background: #fafafa; }
+  .label b { font-size: 14px; }
+  .note { font-size: 12px; color: #a33; }
+  .row { display: flex; } .col { display: flex; flex-direction: column; }
+  .box { border: 1.2px solid #555; margin: 6px; padding: 8px; font-size: 12px; position: relative; }
+  .muted { color: #777; } .dash { border-style: dashed; }
+  .x { background: repeating-linear-gradient(45deg, #fff 0 8px, #eee 8px 9px); }
+  .btn { display: inline-block; border: 1.5px solid #333; padding: 6px 14px; font-weight: 600; background: #e9e9e9; }
+  .big { font-size: 26px; font-weight: 700; } .h { font-size: 16px; font-weight: 700; }
+  .sec { border-top: 1px solid #999; padding: 6px 2px; display: flex; justify-content: space-between; }
+  .ann { position: absolute; background: #fff4c2; border: 1px solid #c9a400; font-size: 11px; padding: 3px 6px; max-width: 220px; z-index: 2; }
+  .num { display: inline-block; width: 18px; height: 18px; border-radius: 9px; background: #c9a400; color: #fff; font-size: 11px; text-align: center; line-height: 18px; margin-right: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(14, 1fr); gap: 5px; padding: 10px; }
+  .grid i { display: block; height: 14px; border: 1px solid #bbb; }
+  .grid i.c { background: #ddd; } .grid i.f { border: 2px solid #a33; border-radius: 8px; } .grid i.j { background: repeating-linear-gradient(45deg,#ccc 0 2px,#fff 2px 4px); border-color: #777; }
+</style></head><body><div class="sheet">
+<h1>Switchyard V2: wireframes</h1>
+<p class="lede">Low fidelity on purpose: layout, order and words only. Colour, type and spacing come from <code>docs/design/v2.md</code>. Review these before any build. Numbered yellow notes are decisions to check.</p>
+
+<!-- 1. First run -->
+<div class="frame">
+  <div class="label"><b>1 · First run (empty state)</b><span>1440 × 900 · what anyone sees after <code>switchyard view</code></span></div>
+  <div class="box" style="margin:0;border:0;border-bottom:1.2px solid #555;display:flex;gap:16px;align-items:center">
+    <b>Switchyard</b><span class="muted">Preset ▾</span><span class="muted">▶ Play · Speed ▾</span><span style="margin-left:auto" class="muted">delivered — · tick —</span></div>
+  <div class="row" style="height:420px">
+    <div class="box x" style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px">
+      <div class="h">See an incident explained</div>
+      <div class="muted">A chute jams and two robots die. Watch the floor, then read why.</div>
+      <div class="btn">Load an incident</div>
+      <div class="muted" style="font-size:11px">or pick a preset, or inject your own faults</div>
+      <div class="ann" style="left:62%;top:58%"><span class="num">1</span>One button only. It loads two-dead-robots-and-a-jam, plays at 8× to the dip, pauses, and opens Post-mortem.</div>
+    </div>
+    <div class="col" style="width:360px">
+      <div class="box dash muted" style="height:110px">Chart (empty until the run starts)</div>
+      <div class="box dash muted" style="flex:1">Trace · Faults · Post-mortem tabs (disabled until a run exists)</div>
+    </div>
+  </div>
+</div>
+
+<!-- 2. Incident playing -->
+<div class="frame">
+  <div class="label"><b>2 · Incident playing</b><span>1440 × 900 · the guide strip and the floor marks</span></div>
+  <div class="box" style="margin:0;border:0;border-bottom:1.2px solid #555;display:flex;gap:16px"><b>Switchyard</b><span class="muted">two-dead-robots-and-a-jam ▾ · ❚❚ · 8×</span><span style="margin-left:auto" class="muted">delivered 3,926 · 5,736/h · 00:41</span></div>
+  <div class="box" style="margin:0;border:0;border-bottom:1px solid #999;font-size:12px"><b>① Incident</b> → <span class="muted">② Trace a late parcel → ③ Read the post-mortem</span><span style="float:right" class="muted">✕</span>
+    <div class="ann" style="left:520px;top:2px"><span class="num">2</span>The 3-step strip shows once and can be dismissed. The current step is bold.</div></div>
+  <div class="row" style="height:380px">
+    <div class="box" style="flex:1;padding:0">
+      <div class="grid">
+        <i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i>
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        <i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i class="j"></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i>
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        <i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="c"></i><i></i>
+        <i></i><i></i><i></i><i></i><i class="f"></i><i></i><i></i><i></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <div class="ann" style="left:40%;top:30%"><span class="num">3</span>Jammed chute: hatched. Dead robots: a red ring. The area where robots waited glows faintly (needs per-cell wait data; see #33's open question).</div>
+    </div>
+    <div class="col" style="width:360px">
+      <div class="box" style="height:130px">Delivered per minute<br><span class="muted">actual ─ · twin ┄ · incident band ▒ · loss area shaded · "−47 %" at the deepest point</span></div>
+      <div class="box dash muted" style="flex:1">Faults tab: the 3 active faults, each clickable to centre the floor on it</div>
+    </div>
+  </div>
+</div>
+
+<!-- 3. Post-mortem -->
+<div class="frame">
+  <div class="label"><b>3 · Post-mortem (the 10-second screen)</b><span>1440 × 900 · the sidebar widens to 420 px</span></div>
+  <div class="row" style="height:560px">
+    <div class="box x" style="flex:1;display:flex;align-items:center;justify-content:center"><span class="muted">Floor, eased in to frame the incident area (400 ms)</span></div>
+    <div class="col" style="width:440px">
+      <div class="box" style="height:90px">Chart (compact)</div>
+      <div class="box" style="padding:12px">
+        <div class="muted" style="font-size:11px">INCIDENT 00:30–00:52 · 47 % BELOW TWIN</div>
+        <div class="h" style="margin:6px 0 2px">The C289 jam caused 70 % of the delay.</div>
+        <div style="font-size:15px">Rerouting C289's parcels to C269 would have saved 83 %.</div>
+        <div class="row" style="gap:22px;margin:10px 0 4px"><div><div class="big">6,264</div><span class="muted">parcel-min</span></div><div><div class="big">110</div><span class="muted">parcels late</span></div><div><div class="big">83 %</div><span class="muted">recoverable</span></div></div>
+        <div class="muted" style="font-size:11px">Proven by 96 replays · error bars from 8 versions of the day · How we know ▸</div>
+        <div class="ann" style="left:-250px;top:10px"><span class="num">4</span>This card is the whole product in one glance. The 10-second test is read from this card only.</div>
+      </div>
+      <div class="box" style="font-size:12px">
+        <div class="sec"><b>Top causes</b><span>▾</span></div>
+        <div class="muted" style="padding:2px 4px 6px">Chute C289 jams ████████████ 70 % · Robot R119 ██ 15 % · Robot R57 ██ 15 % <i>(tie)</i></div>
+        <div class="sec"><span>Fixes tested</span><span class="muted">4 tested · best 83 % ▸</span></div>
+        <div class="sec"><span>Impact</span><span class="muted">110 late · 596 peak backlog ▸</span></div>
+        <div class="sec"><span>How the faults interacted</span><span class="muted">jam + each robot made it worse ▸</span></div>
+        <div class="sec"><span>Timeline</span><span class="muted">00:30 jam → 00:52 recovered ▸</span></div>
+        <div class="sec"><span>Method</span><span class="muted">replays, error bars, settings ▸</span></div>
+        <div class="ann" style="left:-250px;top:40px"><span class="num">5</span>Every closed section shows a one-line teaser, so you don't need to open it. Plain words, with no F0/R0 ids or brackets above the fold.</div>
+      </div>
+      <div class="box dash muted" style="font-size:11px">Analyse this run now (for your own faults) · Precomputed for this preset</div>
+    </div>
+  </div>
+</div>
+
+<!-- 4. Narrow + CLI -->
+<div class="row" style="gap:28px;align-items:flex-start">
+  <div class="frame" style="width:380px">
+    <div class="label"><b>4 · Narrow (820 px and below)</b><span></span></div>
+    <div class="box" style="margin:0;border:0;border-bottom:1px solid #999"><b>Switchyard</b> <span class="muted">☰</span></div>
+    <div class="box x" style="height:200px;display:flex;align-items:center;justify-content:center"><span class="muted">Floor (55 % height)</span></div>
+    <div class="box" style="padding:10px"><div class="h" style="font-size:14px">The C289 jam caused 70 % of the delay.</div><div style="font-size:12px">Rerouting… would have saved 83 %.</div><div class="row" style="gap:12px;margin-top:6px"><b>6,264</b><b>110</b><b>83 %</b></div></div>
+    <div class="box dash muted">Sections, all collapsed</div>
+    <div class="ann" style="position:relative;margin:6px"><span class="num">6</span>The card moves above the chart on narrow screens. The answer always comes first.</div>
+  </div>
+  <div class="frame" style="flex:1">
+    <div class="label"><b>5 · CLI report (switchyard postmortem → report.md)</b><span>the same order as the panel</span></div>
+    <div class="box" style="font-family:Consolas,monospace;font-size:12px;line-height:1.5;border:0">
+      # Post-mortem: two-dead-robots-and-a-jam<br>
+      <b>The C289 jam caused 70 % of the delay. Rerouting C289's parcels to C269 would have saved 83 %.</b><br>
+      6,264 parcel-min · 110 parcels late · 83 % recoverable<br>
+      <span class="muted">Proven by 96 replays · error bars from 8 versions of the day</span><br><br>
+      ## Top causes &nbsp;(table)<br>
+      &lt;details&gt; Fixes tested &lt;/details&gt;<br>&lt;details&gt; Impact &lt;/details&gt;<br>&lt;details&gt; Interactions &lt;/details&gt;<br>&lt;details&gt; Timeline &lt;/details&gt;<br>&lt;details&gt; Method &lt;/details&gt;
+    </div>
+    <div class="ann" style="position:relative;margin:8px"><span class="num">7</span>On GitHub, &lt;details&gt; renders as collapsible sections, so a pasted report reads like the panel.</div>
+  </div>
+</div>
+
+<h1 style="font-size:16px;margin-top:8px">Decisions to confirm before the build</h1>
+<ol style="font-size:13px;line-height:1.6">
+<li>One-button first run (frame 1). Is that enough, or do you also want a short intro line about what Switchyard is?</li>
+<li>The glow (frame 2, note 3): build per-cell wait data so it's honest, or drop the glow and keep only the rings and hatching?</li>
+<li>The Root-cause table drops the Replays and Source columns (they move to Method). The spec said keep them; the test graders still parse the table either way.</li>
+<li>Dark theme only for V2, or add a light theme for screenshots and print?</li>
+</ol>
+</div></body></html>
