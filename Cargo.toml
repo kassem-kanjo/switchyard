@@ -32,6 +32,10 @@ rand_core = { version = "0.9", default-features = false }
 # dlltool on the windows-gnu toolchain (see ARCHITECTURE §9).
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 wasm-bindgen = "0.2"
+# `switchyard view` serves an embedded copy of the production viewer.
+# include_dir! embeds the built `viewer/dist` tree as a static directory.
+include_dir = "0.7"
+tiny_http = "0.12"
 # Property tests (dev only). No default features: "fork"/"timeout" pull in
 # process-spawning helpers we do not need.
 proptest = { version = "1", default-features = false, features = ["std"] }

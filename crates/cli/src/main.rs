@@ -6,6 +6,7 @@
 mod chaos;
 mod export;
 mod postmortem;
+mod view;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -48,6 +49,8 @@ enum Command {
     /// Detect an incident, prove its causes by replay and write a
     /// post-mortem.
     Postmortem(postmortem::PostmortemArgs),
+    /// Serve the production viewer locally and open it in a browser.
+    View(view::ViewArgs),
 }
 
 fn main() -> ExitCode {
@@ -66,6 +69,7 @@ fn main() -> ExitCode {
         },
         Command::Chaos(args) => chaos::main(&args),
         Command::Postmortem(args) => postmortem::main(&args),
+        Command::View(args) => view::main(&args),
         Command::Export(args) => match export::run_export(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
