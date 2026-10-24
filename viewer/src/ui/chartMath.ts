@@ -119,3 +119,15 @@ export function noiseHalfWidth(delivered: readonly number[], twin: readonly numb
   const mean = sample.reduce((a, b) => a + b, 0) / sample.length;
   return Math.sqrt(sample.reduce((a, b) => a + (b - mean) ** 2, 0) / sample.length);
 }
+
+/** Merge overlapping or touching fault windows into the incident windows the chart shades. */
+export function mergeWindows<T extends { startTick: number; endTick: number }>(faults: readonly T[]): { startTick: number; endTick: number }[] {
+  const sorted = [...faults].sort((a, b) => a.startTick - b.startTick);
+  const out: { startTick: number; endTick: number }[] = [];
+  for (const f of sorted) {
+    const last = out[out.length - 1];
+    if (last && f.startTick <= last.endTick) last.endTick = Math.max(last.endTick, f.endTick);
+    else out.push({ startTick: f.startTick, endTick: f.endTick });
+  }
+  return out;
+}

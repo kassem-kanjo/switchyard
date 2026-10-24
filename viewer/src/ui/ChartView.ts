@@ -1,6 +1,6 @@
 import { theme, type Theme } from "../theme";
 import type { MetricsSeries } from "../data/types";
-import { deepestDip, formatReadout, hoverReadout, indexAt, makeScale, noiseHalfWidth, tickToIndex, yTicks, type Scale } from "./chartMath";
+import { deepestDip, mergeWindows, formatReadout, hoverReadout, indexAt, makeScale, noiseHalfWidth, tickToIndex, yTicks, type Scale } from "./chartMath";
 
 /** Canvas line chart: delivered per minute, dashed twin, shaded fault windows, hover readout. */
 export class ChartView {
@@ -120,7 +120,8 @@ export class ChartView {
     ctx.beginPath();
     ctx.rect(rect.left, rect.top, rect.width, rect.height);
     ctx.clip();
-    for (const f of s.faults) {
+    // Overlapping faults make one incident window, so shades don't stack into a dark block.
+    for (const f of mergeWindows(s.faults)) {
       const x0 = scale.x(tickToIndex(f.startTick, s.startMinute, s.ticksPerMinute));
       const x1 = scale.x(tickToIndex(f.endTick, s.startMinute, s.ticksPerMinute));
       if (x1 < rect.left || x0 > rect.left + rect.width) continue;
@@ -181,7 +182,7 @@ export class ChartView {
         ctx.textAlign = "left";
         ctx.textBaseline = "alphabetic";
         const lx = Math.min(px + 7, rect.left + rect.width - lw);
-        ctx.fillText(label, lx, Math.min(py - 6, rect.top + rect.height - 14));
+        ctx.fillText(label, Math.max(rect.left, lx - lw - 14), Math.min(py + 16, rect.top + rect.height - 4));
         ctx.font = c.font;
       }
     }
