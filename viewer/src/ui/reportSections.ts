@@ -34,6 +34,8 @@ export interface SplitReport {
 const strip = (s: string): string => s.replace(/<[^>]*>/g, "").replace(/\*\*|\*/g, "").trim();
 const eachLine = (s: string): string[] => s.split(String.fromCharCode(10)).map(strip).filter((l) => l !== "");
 
+const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
 /** `**6,264** parcel-min of delay` -> value and caption. */
 function parseStat(part: string): { value: string; caption: string } | null {
   const m = /^\*\*([^*]+)\*\*\s*(.*)$/.exec(part.trim());
@@ -50,7 +52,8 @@ function parseCard(paras: string[]): HeadlineCard | null {
     eyebrow: strip(eyebrow),
     sentences: eachLine(sentence),
     stats: stats as { value: string; caption: string }[],
-    provenance: strip(provenance),
+    // The card adds its own "How we know" link, so drop the prefix rather than say it twice.
+    provenance: capitalise(strip(provenance).replace(/^How we know:\s*/i, "")),
   };
 }
 
