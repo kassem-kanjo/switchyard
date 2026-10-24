@@ -39,5 +39,23 @@
     "atTick": 120,
     "durationTicks": 300,
     "endTick": 420
+  },
+  "headline": {
+    "startMin": 30,
+    "endMin": 52,
+    "settled": true,
+    "maxDipPct": 47.3,
+    "cause": { "label": "C289 jam", "fault": "F0", "sharePct": 69.9, "bandPct": 3.2 },
+    "tieWith": null,
+    "lossParcelMin": 6264,
+    "lateParcels": 110,
+    "fix": {
+      "label": "send chute C289's destination to C269 from the jam on (never undone)",
+      "recoveredParcelMin": 5162,
+      "recoveryPct": 83.4,
+      "withinNoise": false
+    },
+    "replays": 96,
+    "histories": 8
   }
 }

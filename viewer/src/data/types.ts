@@ -97,9 +97,59 @@ export interface FaultControl {
   active(nowTick: number): Promise<ActiveFault[]>;
 }
 
+export interface HeadlineCause {
+  /** Short label, e.g. "C289 jam". */
+  label: string;
+  /** The fault's id, e.g. "F0". */
+  fault: string;
+  /** Share of the median loss explained, in %. */
+  sharePct: number;
+  /** The share's noise band, in %. */
+  bandPct: number;
+}
+
+export interface HeadlineFix {
+  /** The fix's label, verbatim. */
+  label: string;
+  /** Recovered delay, whole parcel-minutes. */
+  recoveredParcelMin: number;
+  /** Share of the median loss recovered, in %. */
+  recoveryPct: number;
+  /** True when the gain is within its noise band. */
+  withinNoise: boolean;
+}
+
+/** The one-glance summary of a post-mortem (`Headline`). */
+export interface PostmortemHeadline {
+  /** Incident window start (minute of the run). */
+  startMin: number;
+  /** Window end (minute of the run). */
+  endMin: number;
+  /** False when the incident was still open when the run ended. */
+  settled: boolean;
+  /** The worst throughput dip against the twin, in %. */
+  maxDipPct: number;
+  /** The main cause, if the loss is attributable and a cause stands out. */
+  cause: HeadlineCause | null;
+  /** Short label of the second cause when it ties the first. */
+  tieWith: string | null;
+  /** Real history's loss, whole parcel-minutes. */
+  lossParcelMin: number;
+  /** Parcels more than the SLA late at the horizon, real history. */
+  lateParcels: number;
+  /** The best non-hotspot fix with a gain above zero. */
+  fix: HeadlineFix | null;
+  /** Replays behind the post-mortem. */
+  replays: number;
+  /** Histories every replay ran on. */
+  histories: number;
+}
+
 export interface PostmortemProvider {
   /** Markdown report. Treated as untrusted text by the UI. */
   report(): Promise<string>;
+  /** One-glance summary, or null when there is no incident to explain. */
+  headline(): Promise<PostmortemHeadline | null>;
   /** Precomputed report for a preset (ADR 0006 section 8), or null when there is none. Untrusted text. */
   precomputed(preset: string): Promise<string | null>;
 }

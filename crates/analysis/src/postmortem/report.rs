@@ -11,6 +11,7 @@ use switchyard_core::Tick;
 use switchyard_core::interventions::Intervention;
 
 use super::candidates::{MAX_CANDIDATES, minutes};
+use super::headline::short_label;
 use super::shapley::Interplay;
 use super::{PostMortem, describe_kind, significant};
 use crate::metrics::{TICKS_PER_MINUTE, minute_tick};
@@ -61,11 +62,39 @@ fn horizon_note(pm_: &PostMortem, window_end_min: usize) -> String {
     }
 }
 
-/// The first two sections (title, header, summary): what the CLI prints.
+/// Start a folded section: GitHub and the viewer's panel both read this
+/// `<details>` block. The `## ` heading stays inside it (graders and plain
+/// Markdown readers still find it); the row shows the title and a teaser.
+fn open_section(o: &mut String, title: &str, teaser: &str) {
+    let _ = writeln!(
+        o,
+        "\n<details>\n<summary><b>{title}</b> — {teaser}</summary>\n"
+    );
+}
+
+/// End a folded section.
+fn close_section(o: &mut String) {
+    let _ = writeln!(o, "\n</details>");
+}
+
+/// A whole number with thousands separators: `6264` -> `6,264`.
+pub(super) fn thousands(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
+}
+
+/// The first sections (title, headline, header, summary): what the CLI prints.
 #[must_use]
 pub fn summary(pm_: &PostMortem) -> String {
     let md = render(pm_);
-    md.split("\n## Impact")
+    md.split("\n<details>")
         .next()
         .unwrap_or_default()
         .trim_end()
@@ -90,6 +119,10 @@ pub fn render(pm_: &PostMortem) -> String {
         );
         return o;
     };
+
+    if let Some(h) = pm_.headline() {
+        let _ = writeln!(o, "{}\n", h.markdown());
+    }
 
     let n = pm_.candidates.len();
     let att = &pm_.attribution;
@@ -259,7 +292,17 @@ pub fn render(pm_: &PostMortem) -> String {
 
     // ---- Impact
     let s = &pm_.score;
-    let _ = writeln!(o, "\n## Impact\n");
+    open_section(
+        &mut o,
+        "Impact",
+        &format!(
+            "{} parcels late · peak backlog {} (twin {})",
+            pm_.real_late(),
+            s.peak_backlog,
+            s.twin_peak_backlog
+        ),
+    );
+    let _ = writeln!(o, "## Impact\n");
     let _ = writeln!(o, "| Measure | Value |\n|---|---|");
     let _ = writeln!(
         o,
@@ -312,10 +355,26 @@ pub fn render(pm_: &PostMortem) -> String {
         "\nHow we know: the real shift compared with its fault-free twin up to {}.",
         clock(pm_.horizon)
     );
+    close_section(&mut o);
 
     // ---- Root causes
     if n > 0 {
-        let _ = writeln!(o, "\n## Root causes (system conditions)\n");
+        open_section(
+            &mut o,
+            "Root causes",
+            &match order.first() {
+                Some(&i) => format!(
+                    "{n} {} tested · {} first",
+                    plural(n, "cause", "causes"),
+                    short_label(&pm_.candidates[i].spec.kind)
+                ),
+                None => format!(
+                    "{n} {} tested · none stands out of the noise",
+                    plural(n, "cause", "causes")
+                ),
+            },
+        );
+        let _ = writeln!(o, "## Root causes (system conditions)\n");
         let _ = writeln!(
             o,
             "Each cause was removed in every combination and the shift replayed (exact Shapley \
@@ -415,7 +474,7 @@ pub fn render(pm_: &PostMortem) -> String {
         if any_interactions {
             let _ = writeln!(
                 o,
-                "\nHow we know: interactions come from every replay [{lattice}], not just the three named."
+                "\nHow we know: interactions come from every replay ({lattice}), not just the three named."
             );
         }
         let sets = att.minimal_sufficient_banded(pm_.options.tau_pct, &mask_bands);
@@ -457,11 +516,21 @@ pub fn render(pm_: &PostMortem) -> String {
                 ids.join(", ")
             );
         }
+        close_section(&mut o);
     }
 
     // ---- Hotspots
     if !pm_.hotspots.is_empty() {
-        let _ = writeln!(o, "\n## Capacity hotspots (a different question)\n");
+        open_section(
+            &mut o,
+            "Capacity hotspots",
+            &format!(
+                "{} {} found, a different question from the causes",
+                pm_.hotspots.len(),
+                plural(pm_.hotspots.len(), "limit", "limits")
+            ),
+        );
+        let _ = writeln!(o, "## Capacity hotspots (a different question)\n");
         let _ = writeln!(
             o,
             "Limits the floor hit with no fault involved. Testing one means relaxing capacity \
@@ -489,10 +558,16 @@ pub fn render(pm_: &PostMortem) -> String {
             "\nHow we know: relaxed values come from a replay with the capacity limit lifted, not \
              from removing a fault."
         );
+        close_section(&mut o);
     }
 
     // ---- Trigger, detection, resolution
-    let _ = writeln!(o, "\n## Trigger and detection\n");
+    open_section(
+        &mut o,
+        "Trigger and detection",
+        &format!("alarm at {}", clock_min(inc.alarm)),
+    );
+    let _ = writeln!(o, "## Trigger and detection\n");
     if let Some(c) = pm_.candidates.iter().min_by_key(|c| (c.spec.at, c.fault)) {
         let _ = writeln!(
             o,
@@ -534,7 +609,17 @@ pub fn render(pm_: &PostMortem) -> String {
         "\nHow we know: the trigger is the scenario's earliest fault; detection compares the real \
          run with its fault-free twin."
     );
-    let _ = writeln!(o, "\n## Resolution\n");
+    close_section(&mut o);
+    open_section(
+        &mut o,
+        "Resolution",
+        &match (inc.settled, s.time_to_recover_min) {
+            (false, _) => "still open when the run ended".to_owned(),
+            (true, Some(m)) => format!("recovered {m} min after the window opened"),
+            (true, None) => "not recovered before the run ended".to_owned(),
+        },
+    );
+    let _ = writeln!(o, "## Resolution\n");
     if inc.settled {
         let _ = writeln!(
             o,
@@ -562,12 +647,29 @@ pub fn render(pm_: &PostMortem) -> String {
     );
 
     // ---- What would have helped
-    let _ = writeln!(o, "\n## What would have helped\n");
+    close_section(&mut o);
+    open_section(
+        &mut o,
+        "What would have helped",
+        &match fix_rows.first() {
+            Some(&(_, g, b)) if g > 0 && significant(g as f64, b) => format!(
+                "{} {} tested · best {:.0} %",
+                fix_rows.len(),
+                plural(fix_rows.len(), "fix", "fixes"),
+                100.0 * g as f64 / loss.max(1) as f64
+            ),
+            _ => format!(
+                "{} {} tested · none clearly helps",
+                fix_rows.len(),
+                plural(fix_rows.len(), "fix", "fixes")
+            ),
+        },
+    );
+    let _ = writeln!(o, "## What would have helped\n");
     let _ = writeln!(
         o,
-        "Each fix was applied to the real shift at the time shown and replayed to {}; *Alone*, \
-         *Last* and each fix's gain are the median over the histories of each history's own \
-         difference.\n",
+        "Each fix was applied to the real shift at the time shown and replayed to {}. Each fix's \
+         gain is the median over the histories of each history's own difference.\n",
         clock(pm_.horizon)
     );
     let _ = writeln!(
@@ -599,7 +701,19 @@ pub fn render(pm_: &PostMortem) -> String {
     );
 
     // ---- Action items
-    let _ = writeln!(o, "\n## Action items\n");
+    close_section(&mut o);
+    let n_actions = usize::from(!order.is_empty() && attributable)
+        + fix_rows
+            .iter()
+            .filter(|&&(_, g, b)| g > 0 && significant(g as f64, b))
+            .take(2)
+            .count();
+    open_section(
+        &mut o,
+        "Action items",
+        &format!("{n_actions} {}", plural(n_actions, "action", "actions")),
+    );
+    let _ = writeln!(o, "## Action items\n");
     let _ = writeln!(
         o,
         "| Action | Type | Expected effect | Owner |\n|---|---|---|---|"
@@ -635,8 +749,6 @@ pub fn render(pm_: &PostMortem) -> String {
     );
 
     // ---- Timeline
-    let _ = writeln!(o, "\n## Timeline\n");
-    let _ = writeln!(o, "| Time | Tick | Event |\n|---|---|---|");
     let mut events: Vec<(Tick, String)> =
         pm_.timeline.iter().map(|(t, e)| (*t, e.clone())).collect();
     let at = minute_tick;
@@ -647,6 +759,10 @@ pub fn render(pm_: &PostMortem) -> String {
     }
     events.push((pm_.horizon, "loss scored (horizon)".to_owned()));
     events.sort_by_key(|e| e.0);
+    close_section(&mut o);
+    open_section(&mut o, "Timeline", &format!("{} events", events.len()));
+    let _ = writeln!(o, "## Timeline\n");
+    let _ = writeln!(o, "| Time | Tick | Event |\n|---|---|---|");
     for (t, e) in events {
         let _ = writeln!(o, "| {} | {t} | {e} |", clock(t));
     }
@@ -657,7 +773,13 @@ pub fn render(pm_: &PostMortem) -> String {
     );
 
     // ---- Method
-    let _ = writeln!(o, "\n## Method and confidence\n");
+    close_section(&mut o);
+    open_section(
+        &mut o,
+        "Method and confidence",
+        "how the numbers were made and how far to trust them",
+    );
+    let _ = writeln!(o, "## Method and confidence\n");
     let robots: Vec<String> = pm_.dither.iter().map(ToString::to_string).collect();
     let _ = writeln!(
         o,
@@ -719,6 +841,17 @@ pub fn render(pm_: &PostMortem) -> String {
     );
 
     // ---- Replay index
+    close_section(&mut o);
+    open_section(
+        &mut o,
+        "Appendix: replay index",
+        &format!(
+            "{} {} × {histories} {}, one row per change",
+            pm_.replays.len(),
+            plural(pm_.replays.len(), "change", "changes"),
+            plural(histories, "history", "histories")
+        ),
+    );
     let _ = writeln!(o, "## Appendix: replay index\n");
     let _ = writeln!(
         o,
@@ -757,6 +890,7 @@ pub fn render(pm_: &PostMortem) -> String {
         pm_.ticks,
         minutes(pm_.ticks)
     );
+    close_section(&mut o);
     o
 }
 
@@ -1065,6 +1199,40 @@ mod tests {
         // Compounding: either removal recovers most -> I < 0 -> compound.
         let b = Attribution::new(&[0, 500, 500, 600]);
         assert!(interplay_text(Interplay::of(b.interaction(0, 1)), "100").contains("compound"));
+    }
+
+    /// The headline is the first block under the title, the details are
+    /// folded, and the CLI summary stops before the first fold.
+    #[test]
+    fn the_headline_comes_first_and_the_detail_is_folded() {
+        let pm = small_incident();
+        let md = render(&pm);
+        let head = md.find("**Incident ").expect("headline eyebrow");
+        let generated = md.find("**Generated by**").unwrap();
+        let first_fold = md.find("<details>").unwrap();
+        assert!(head < generated && generated < first_fold, "{md}");
+        assert_eq!(
+            md.matches("<details>").count(),
+            md.matches("</details>").count()
+        );
+        // Every fold names itself on one summary line.
+        for line in md.lines().filter(|l| l.starts_with("<summary>")) {
+            assert!(
+                line.contains("<b>") && line.contains(" \u{2014} "),
+                "{line}"
+            );
+        }
+        let s = summary(&pm);
+        assert!(s.contains("## Summary") && !s.contains("<details>"), "{s}");
+    }
+
+    #[test]
+    fn thousands_get_separators() {
+        assert_eq!(thousands(6264), "6,264");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+        assert_eq!(thousands(-1500), "-1,500");
+        assert_eq!(thousands(0), "0");
     }
 
     #[test]

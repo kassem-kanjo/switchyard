@@ -44,6 +44,8 @@ function rpc(s: WasmSimApi, req: Extract<WorkerRequest, { type: "rpc" }>): strin
       return s.active_faults_json(n);
     case "postmortem_markdown":
       return s.postmortem_markdown();
+    case "postmortem_headline":
+      return s.postmortem_headline();
     case "state_hash_hex":
       return s.state_hash_hex();
   }

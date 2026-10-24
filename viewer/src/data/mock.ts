@@ -8,6 +8,7 @@ import type {
   MetricsSeries,
   ParcelTrace,
   PhaseName,
+  PostmortemHeadline,
   PostmortemProvider,
   Services,
   TraceProvider,
@@ -229,6 +230,9 @@ Rerouting aisle 7 would have recovered 88 % of the loss.
 class MockPostmortem implements PostmortemProvider {
   report(): Promise<string> {
     return Promise.resolve(MOCK_REPORT);
+  }
+  headline(): Promise<PostmortemHeadline | null> {
+    return Promise.resolve(null);
   }
   precomputed(_preset: string): Promise<string | null> {
     return Promise.resolve(null);

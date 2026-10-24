@@ -43,7 +43,7 @@ mod json;
 pub mod store;
 
 use serde::Serialize;
-use switchyard_analysis::postmortem::{self, report};
+use switchyard_analysis::postmortem::{self, PostMortem, report};
 use switchyard_core::TICKS_PER_HOUR;
 use switchyard_core::config::ScenarioConfig;
 use switchyard_core::events::Event;
@@ -56,7 +56,7 @@ use switchyard_core::world::{Phase, RobotState};
 use switchyard_trace::{ParcelTrace, TraceBuilder};
 use wasm_bindgen::prelude::{JsError, wasm_bindgen};
 
-use json::{MetricsOut, WindowOut};
+use json::{HeadlineOut, MetricsOut, WindowOut};
 use store::TraceStore;
 
 /// Ticks in a simulated minute (1 tick = 0.5 s): 120.
@@ -518,31 +518,49 @@ impl WasmSim {
     /// of an analysis.
     #[must_use]
     pub fn postmortem_markdown(&self) -> String {
+        match self.run_postmortem() {
+            Ok(pm) => report::render(&pm),
+            Err(text) => text,
+        }
+    }
+
+    /// The one-glance summary of the run's post-mortem, as JSON
+    /// (`PostmortemHeadline`), or `null` when no incident was detected or when
+    /// the run is out of the browser's range (same guards as
+    /// [`Self::postmortem_markdown`]).
+    #[must_use]
+    pub fn postmortem_headline(&self) -> String {
+        let headline = self.run_postmortem().ok().and_then(|pm| pm.headline());
+        to_json(&headline.as_ref().map(HeadlineOut::from))
+    }
+
+    /// Run the in-browser post-mortem, or return the report text explaining
+    /// why this run is out of range.
+    fn run_postmortem(&self) -> Result<PostMortem, String> {
         let cfg = self.sim.config();
         let n = cfg.enabled_faults().count();
         let ticks = self.sim.tick();
         if n == 0 {
-            return NO_FAULTS_REPORT.to_owned();
+            return Err(NO_FAULTS_REPORT.to_owned());
         }
         if n > BROWSER_MAX_FAULTS {
-            return too_many_faults_report(n, ticks);
+            return Err(too_many_faults_report(n, ticks));
         }
         if ticks > BROWSER_MAX_TICKS {
-            return too_long_report(ticks);
+            return Err(too_long_report(ticks));
         }
         let options = postmortem::Options {
             dither: BROWSER_DITHER,
             ..postmortem::Options::default()
         };
-        match postmortem::run(cfg, ticks, &options) {
-            Ok(pm) => report::render(&pm),
-            Err(e) => format!(
+        postmortem::run(cfg, ticks, &options).map_err(|e| {
+            format!(
                 "# Post-mortem
 
 > **Failed.** {e}
 "
-            ),
-        }
+            )
+        })
     }
 }
 
@@ -962,5 +980,24 @@ mod tests {
         assert!(md.starts_with("# "), "{md}");
         assert!(!md.contains("Nothing to analyse"), "{md}");
         assert!(!md.contains("**Failed.**"), "{md}");
+    }
+
+    #[test]
+    fn postmortem_headline_follows_the_shared_shape() {
+        let fx = fixture();
+        let mut w = small();
+        w.step(120);
+        let busy = w.sim.world().destination_chute[0];
+        w.inject(&request("chute_jam", &json!({"chute": busy.0}), 600, 1800))
+            .unwrap();
+        w.step(4800);
+        let h = parse(&w.postmortem_headline());
+        conforms(&h, &fx["headline"], "headline");
+        assert!(h["cause"].is_object(), "{h}");
+    }
+
+    #[test]
+    fn postmortem_headline_without_faults_is_null() {
+        assert_eq!(small().postmortem_headline(), "null");
     }
 }

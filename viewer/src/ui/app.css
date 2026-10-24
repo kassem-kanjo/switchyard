@@ -48,7 +48,7 @@ button, select, input { font: inherit; color: inherit; }
 .row { display: flex; gap: 6px; margin-bottom: 10px; }
 .row input { flex: 1; min-width: 0; }
 input, select { background: var(--bg); border: 1px solid var(--border-strong); border-radius: 4px; padding: 5px 8px; }
-button.primary, .row button, #panel-postmortem button { background: var(--accent); color: var(--wall); border: 0; border-radius: 4px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
+button.primary, .row button, #panel-postmortem > button { background: var(--accent); color: var(--wall); border: 0; border-radius: 4px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
 button:disabled { opacity: 0.6; cursor: default; }
 .note { margin: 6px 0; color: var(--text-muted); font-size: 13px; line-height: 1.45; }
 .note.error, .err { color: var(--danger); }
@@ -101,3 +101,48 @@ button:disabled { opacity: 0.6; cursor: default; }
 @media (prefers-reduced-motion: no-preference) {
   .faults .bar i { transition: width 0.3s linear; }
 }
+
+/* Collapsible section: header button plus a body that can be hidden. */
+.collapsible-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+}
+.collapsible-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.collapsible-title { font-weight: 600; }
+.collapsible-teaser {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.collapsible-chevron { flex: none; color: var(--text-muted); }
+.collapsible[data-open="true"] .collapsible-chevron { transform: rotate(90deg); }
+.collapsible-body { padding-top: 8px; }
+
+/* Headline card: the plain sentence and three numbers; the proof is one click away. */
+.headline-card { margin: 10px 0 12px; padding: 16px; background: var(--panel-raised); border: 1px solid var(--border-strong); border-radius: 6px; }
+.hc-eyebrow { margin: 0 0 8px; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.hc-sentences p { margin: 0 0 6px; padding-left: 10px; font-size: 18px; line-height: 1.3; border-left: 3px solid var(--border-strong); }
+.hc-sentences .hc-cause { font-weight: 600; border-left-color: var(--danger); }
+.hc-sentences .hc-fix { border-left-color: var(--ok); }
+.hc-stats { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 12px 0; font-variant-numeric: tabular-nums; }
+.hc-stat { display: flex; flex-direction: column; }
+.hc-num { font-size: 30px; font-weight: 600; line-height: 1.1; }
+.hc-cap { color: var(--text-muted); font-size: 12px; }
+.hc-proof { margin: 0; color: var(--text-muted); font-size: 12px; }
+button.link { padding: 0; background: none; border: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
+button.link:hover { text-decoration: underline; }
+.report .collapsible { margin-bottom: 2px; }
+.pm-top { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.pm-top .note { margin: 0; flex: 1; min-width: 12em; }

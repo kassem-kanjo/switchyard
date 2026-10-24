@@ -8,7 +8,7 @@
 - **Repo is public** (2026-10-24). Posting waits on Kassem's go.
 
 ## Next: V2 (planned 2026-10-24; plan `docs/plans/v2.md`, design `docs/design/v2.md`, ADR 0007)
-1. **CP1, a report you act on in 10 s:** #24 headline card and folded report, #22 plain wording.
+1. **CP1, a report you act on in 10 s:** built on branch `feat/v2-cp1` (#24 headline card and folded report, #22 plain wording); awaiting the Opus review, then the PR. Screenshot: `docs/checkpoints/img/v2-cp1-headline.png`.
 2. **CP2, credible and one command:** #32 design tokens, #33 incident on the floor, #34 first-run path, #35 `switchyard view`.
 3. **CP3, launch:** #9 README refresh, #10 video re-render, #23 launch, #36 outreach kit, #26 piece (optional).
 Each issue names its OpenCode worker pieces (W1-W10); Sonnet leads integrate; one Opus review per CP.

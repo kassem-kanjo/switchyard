@@ -7,6 +7,7 @@ import type {
   MetricsFeed,
   MetricsSeries,
   ParcelTrace,
+  PostmortemHeadline,
   PostmortemProvider,
   Services,
   TraceProvider,
@@ -62,6 +63,9 @@ class WasmPostmortem implements PostmortemProvider {
   ) {}
   report(): Promise<string> {
     return this.client.rpc("postmortem_markdown");
+  }
+  async headline(): Promise<PostmortemHeadline | null> {
+    return parse<PostmortemHeadline | null>(await this.client.rpc("postmortem_headline"));
   }
   async precomputed(preset: string): Promise<string | null> {
     if (!/^[a-z0-9-]+$/.test(preset)) return null; // never build a URL from odd input
