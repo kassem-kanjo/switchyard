@@ -66,9 +66,16 @@ fn horizon_note(pm_: &PostMortem, window_end_min: usize) -> String {
 /// `<details>` block. The `## ` heading stays inside it (graders and plain
 /// Markdown readers still find it); the row shows the title and a teaser.
 fn open_section(o: &mut String, title: &str, teaser: &str) {
+    open_section_as(o, title, teaser, false);
+}
+
+/// [`open_section`], unfolded when `open` (the design keeps the top causes
+/// in view: docs/design/v2.md, collapsible sections).
+fn open_section_as(o: &mut String, title: &str, teaser: &str, open: bool) {
+    let attr = if open { " open" } else { "" };
     let _ = writeln!(
         o,
-        "\n<details>\n<summary><b>{title}</b> — {teaser}</summary>\n"
+        "\n<details{attr}>\n<summary><b>{title}</b> — {teaser}</summary>\n"
     );
 }
 
@@ -220,7 +227,7 @@ pub fn render(pm_: &PostMortem) -> String {
             .map(|&i| {
                 format!(
                     "{} explains {} ({} parcel-min)",
-                    label(i),
+                    describe_kind(&pm_.candidates[i].spec.kind),
                     share(att.shapley(i), pm_.share_band(i)),
                     pminf(att.shapley(i)),
                 )
@@ -287,7 +294,7 @@ pub fn render(pm_: &PostMortem) -> String {
     let _ = writeln!(
         o,
         "\nHow we know: the real shift and its fault-free twin, plus replays with each cause \
-         removed ({lattice}); see the replay index at the end."
+         removed; the replay index is at the end."
     );
 
     // ---- Impact
@@ -359,7 +366,7 @@ pub fn render(pm_: &PostMortem) -> String {
 
     // ---- Root causes
     if n > 0 {
-        open_section(
+        open_section_as(
             &mut o,
             "Root causes",
             &match order.first() {
@@ -373,6 +380,7 @@ pub fn render(pm_: &PostMortem) -> String {
                     plural(n, "cause", "causes")
                 ),
             },
+            true,
         );
         let _ = writeln!(o, "## Root causes (system conditions)\n");
         let _ = writeln!(
