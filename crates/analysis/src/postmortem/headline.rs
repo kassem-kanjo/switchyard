@@ -54,6 +54,9 @@ pub struct CauseHeadline {
 pub struct FixHeadline {
     /// The fix's label, verbatim.
     pub label: String,
+    /// The fix as a short plain phrase that starts a sentence, e.g.
+    /// "Rerouting C289's parcels to C269".
+    pub phrase: String,
     /// Recovered delay, whole parcel-minutes.
     pub recovered_parcel_min: i64,
     /// Share of the median loss recovered, in %.
@@ -82,6 +85,37 @@ fn parcel_minutes(parcel_ticks: i64) -> i64 {
 }
 
 impl PostMortem {
+    /// Fix `i` as a short plain phrase ("Rerouting C289's parcels to C269").
+    fn fix_phrase(&self, i: usize) -> String {
+        use switchyard_core::interventions::Intervention;
+        let fix = &self.fixes[i];
+        match fix.interventions.as_slice() {
+            [Intervention::RemapDestination { chute: to, .. }, ..] => {
+                let from = self.candidates.iter().find_map(|c| match c.spec.kind {
+                    FaultKind::ChuteJam { chute } if c.spec.at == fix.at => Some(chute),
+                    _ => None,
+                });
+                from.map_or_else(
+                    || format!("Rerouting the jammed chute's parcels to {to}"),
+                    |f| format!("Rerouting {f}'s parcels to {to}"),
+                )
+            }
+            [Intervention::ClearAfter { ticks }] => {
+                format!(
+                    "Clearing dead robots within {}",
+                    super::candidates::minutes(*ticks)
+                )
+            }
+            [Intervention::SetStationCap { cap, .. }] => {
+                format!("Allowing {cap} robots per station")
+            }
+            [Intervention::AddRobots { robots, .. }] => {
+                format!("Adding {robots} spare robots")
+            }
+            _ => "Applying the best fix".to_owned(),
+        }
+    }
+
     /// The one-glance summary; `None` when no incident was detected.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
@@ -139,6 +173,7 @@ impl PostMortem {
             .find(|&(_, g, _)| g > 0)
             .map(|(i, g, b)| FixHeadline {
                 label: self.fixes[i].label.clone(),
+                phrase: self.fix_phrase(i),
                 recovered_parcel_min: parcel_minutes(g),
                 recovery_pct: 100.0 * g as f64 / loss.max(1) as f64,
                 within_noise: !significant(g as f64, b),
@@ -196,7 +231,7 @@ impl Headline {
         let fix = self.fix.as_ref().filter(|f| !f.within_noise);
         let mut sentences = cause;
         if let Some(f) = fix {
-            sentences.push_str(&format!("\n{}", fix_sentence(&f.label, f.recovery_pct)));
+            sentences.push_str(&format!("\n{}", fix_sentence(&f.phrase, f.recovery_pct)));
         }
         let mut stats = vec![
             format!(
@@ -229,9 +264,9 @@ impl Headline {
     }
 }
 
-/// "The best fix is to send ...: it would have saved 83 % of the delay."
-fn fix_sentence(label: &str, pct: f64) -> String {
-    format!("The best fix is to {label}: it would have saved {pct:.0} % of the delay.")
+/// "Rerouting C289's parcels to C269 would have saved 83 %."
+fn fix_sentence(phrase: &str, pct: f64) -> String {
+    format!("{phrase} would have saved {pct:.0} %.")
 }
 
 #[cfg(test)]
@@ -376,6 +411,7 @@ mod tests {
             late_parcels: 110,
             fix: Some(FixHeadline {
                 label: "send chute C289's destination to C269".to_owned(),
+                phrase: "Rerouting C289's parcels to C269".to_owned(),
                 recovered_parcel_min: 5162,
                 recovery_pct: 83.39,
                 within_noise: false,
@@ -391,7 +427,7 @@ mod tests {
             sample().markdown(),
             "**Incident 00:30\u{2013}00:52 \u{b7} up to 47 % below the fault-free twin**\n\n\
              The C289 jam caused 70 % of the delay.\n\
-             The best fix is to send chute C289's destination to C269: it would have saved 83 % of the delay.\n\n\
+             Rerouting C289's parcels to C269 would have saved 83 %.\n\n\
              **6,264** parcel-min of delay \u{b7} **110** parcels late \u{b7} **83 %** recoverable\n\n\
              *How we know: proven by 96 replays of this shift \u{b7} error bars from 8 versions of the day.*"
         );
@@ -417,7 +453,7 @@ mod tests {
         h.fix.as_mut().unwrap().within_noise = true;
         let md = h.markdown();
         assert!(
-            !md.contains("best fix") && !md.contains("recoverable"),
+            !md.contains("would have saved") && !md.contains("recoverable"),
             "{md}"
         );
         // The card still has its three paragraphs after the eyebrow.
