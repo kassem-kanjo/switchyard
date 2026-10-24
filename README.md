@@ -1,149 +1,139 @@
 # Switchyard
 
-**A sortation hub is a distributed system. Switchyard treats it like one:** it traces every parcel, breaks the floor on purpose, and writes the post-mortem for you, with each cause proven by replaying the shift without it.
+**Find out what really broke a robotic sort floor, and what it cost.**
 
-<!-- HERO: demo GIF goes here (V1) -->
-*The GIF will show the 60-second demo below: inject two dead robots and a chute jam, watch throughput dip, click a late parcel to see its blame chain, then read the generated post-mortem.*
+[![CI](https://github.com/kassem-kanjo/switchyard/actions/workflows/ci.yml/badge.svg)](https://github.com/kassem-kanjo/switchyard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kassem-kanjo/switchyard)](https://github.com/kassem-kanjo/switchyard/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-black.svg)](LICENSE)
 
-## The 60-second story
+![Switchyard: a chute jams and two robots die, throughput dips, and the post-mortem explains it](docs/media/demo.gif)
 
-A parcel carrier runs a hub with 200 robots moving about 6,000 parcels an hour. At 14:02 throughput drops by almost a third. The operations manager needs to know three things: what caused it, how much each cause cost, and what would have fixed it.
+When a parcel hub suddenly loses a third of its throughput, nobody can say for sure what caused it or how much each problem cost. Switchyard answers that by **replaying the shift**. It is a deterministic digital twin of a robot sort floor. It re-runs the same day with each problem removed, measures what comes back, and writes the incident post-mortem for you.
 
-Today that answer is a meeting, a guess and a spreadsheet.
+🎬 **Video:** [Switchyard in 52 seconds](docs/media/switchyard-demo.mp4) &nbsp;·&nbsp; 📄 **Paper:** [Replaying the Shift](docs/paper/switchyard-v1.pdf) (3 pages: how it works and what it found)
 
-- Design-time simulators (FlexSim, Emulate3D, AnyLogic) tell you whether a layout will work before go-live. They don't explain Tuesday.
-- Robot-developer tools (Formant, Foxglove) tell you what one robot is doing.
-- Process mining shows that the process deviated, after the fact.
+## What it does
 
-None of them answers "why did we lose 31 % at 14:02, and what is each cause worth?"
+- **Simulates** a sort floor robot by robot: 200 robots moving about 6,300 parcels an hour. Two hours of floor time take half a second on a laptop.
+- **Traces every parcel.** Every robot that waits records why, so each late parcel shows where its time went and who held it up.
+- **Breaks the floor on purpose:** dead robots, blocked aisles, jammed chutes, induction outages, volume surges.
+- **Writes the post-mortem.** It finds the incident, splits the blame between causes, says which fix would have helped most, and proves each claim with a replay.
 
-Switchyard is a deterministic twin of the sort floor with the observability stack of a software service built around it. The demo flow:
+## One incident, explained
 
-1. Open the viewer. A medium hub runs smoothly.
-2. Inject chaos: two robots die in a central aisle, and a chute jams. The throughput chart dips.
-3. Click a late parcel. Its trace shows where its time went and the chain of robots that blocked it, down to the root.
-4. Run the post-mortem. It reads like: *"Throughput fell 31 % at 14:02. The failure in aisle 7 explains 78 % of the lost parcels (replay-verified); the C12 jam explains 19 %."*
+A chute jams and two robots die in the same minute. Throughput falls 47 %, and 110 parcels end up more than ten minutes late. Switchyard runs 96 replays in about five seconds:
 
-<!-- Demo flow: docs/PRODUCT.md section 7. The figures in step 4 are the target output of the V1 demo, not yet produced by the engine. -->
+![The jam caused 70 % of the delay; ten spare robots would have fixed nothing](docs/media/incident.png)
 
-## Why it is different
-
-Software engineering already solved this problem. Distributed tracing finds where a request spent its time. Chaos engineering breaks production on purpose to learn how it fails. Blameless post-mortems turn an incident into a ranked list of causes. Switchyard moves all three onto a robot floor.
-
-| In software | On the sort floor |
-|---|---|
-| Requests | Parcels |
-| Servers | Robots |
-| Queues | Induction stations, chutes |
-| Lock waits | Robots blocking robots |
-| Outages | Dead robots, blocked aisles, jammed chutes, surges |
-
-**The strongest point: causes are proven, not estimated.** Production root-cause tools guess "what if this cause were absent" from correlations. The best learned-graph methods scored close to random in a 2024 benchmark ([ADR 0005](docs/adr/0005-counterfactual-replay-rca.md)). Switchyard's floor is deterministic: a run is a pure function of scenario, seed and fault schedule. So the post-mortem does not estimate. It re-runs the same shift with one cause removed and measures what came back.
-
-**Blame chains alone miss most of the damage.** Switchyard walks the robot wait-for graph to name the root blocker of every delayed parcel. That works, but it only sees direct blocking. In our own chaos presets, with direct attribution working correctly, most of a fault's cost still showed up as congestion: robots yielding, stations backing up, fleets rerouting, far from the fault itself ([CP2 insight](docs/checkpoints/v1-cp2.md)). A blocking chain cannot see that. A replay captures the total effect, because it re-runs every consequence.
-
-<!-- Source: docs/checkpoints/v1-cp2.md "Insight for the product story"; theory in docs/research/2026-10-20-postmortem-engine.md section 3.6. The blame-versus-replay gap chart is planned for V1; no figure is published yet. -->
-
-## Try it
-
-You need Rust (stable) and Node 22. Full setup, including Windows: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-
-```bash
-# Simulate 2 h of the 200-robot medium hub (1 tick = 0.5 s, so 14400 ticks)
-cargo run --release -p switchyard-cli -- run --scenario medium --ticks 14400
-
-# Break it, and score the floor against its fault-free twin, over 5 seeds
-cargo run --release -p switchyard-cli -- chaos \
-  --scenario two-dead-robots-and-a-jam --ticks 14400 --seeds 1..5
-
-# Or inject your own faults
-cargo run --release -p switchyard-cli -- chaos --scenario medium --ticks 14400 \
-  --fault "robot-failure:robot=31,at=30m,for=20m" \
-  --fault "chute-jam:chute=12,at=30m,for=15m"
-
-# Export per-parcel traces; open the result in https://ui.perfetto.dev
-cargo run --release -p switchyard-cli -- export --scenario medium --ticks 14400 \
-  --format perfetto --parcels late:p95 --out traces.json
-```
-
-Presets: `small`, `medium`, `large`, and the chaos presets `aisle-7-blocked`, `peak-surge`, `two-dead-robots-and-a-jam`. Fault kinds: `robot-failure`, `aisle-block`, `chute-jam`, `induction-outage`, `volume-surge`, `scanner-drift`. Export formats: Perfetto (Chrome trace JSON), OTLP JSON, JSONL.
-
-```bash
-# Automatic post-mortem (coming in V1)
-cargo run --release -p switchyard-cli -- postmortem --scenario two-dead-robots-and-a-jam --ticks 14400
-```
-
-<!-- NUMBERS: paste the `run` output (throughput, per-robot rate, state hash) here at V1 -->
-<!-- NUMBERS: paste the `chaos` resilience table (lost parcels, max dip, time to recover) here at V1 -->
-<!-- NUMBERS: paste an excerpt of the generated post-mortem here at V1 -->
-
-The viewer runs the same Rust core compiled to WebAssembly, in a browser worker:
-
-```bash
-cd viewer && npm install && npm run dev
-# choose the hub with ?preset=small | medium | large, for example
-# http://localhost:5173/?preset=medium
-```
+The two robot failures are too close to rank, so the report calls them a tie instead of inventing an order. The usual reflex, sending more robots, would have done nothing, because the bottleneck was a chute. Clearing dead robots in one minute instead of five was worth 28 %, and it costs nothing.
 
 ## How it works
 
+1. **A twin you can rewind.** The simulation is fully deterministic: the same inputs give exactly the same shift, bit for bit, on Windows, macOS, Linux and WebAssembly. So any difference between two runs comes from the one thing that changed.
+2. **Replay the day without each problem.** For an incident, every combination of active faults is removed and the shift is replayed from the nearest checkpoint. Blame is split fairly with the Shapley value from game theory. The same replays show whether two faults overlapped or made each other worse, and test candidate fixes on the real day.
+3. **Honest error bars.** A deterministic twin gives one exact answer, which looks precise but isn't: remove a fault and the robots take slightly different paths. So Switchyard replays several equally plausible versions of the day (one robot pauses for half a second at a moment that shouldn't matter) and reports the spread. Anything inside it is called a tie or "nothing measurable".
+
 ```mermaid
-flowchart TD
-    S[scenarios/*.toml<br/>seed + fault schedule] --> C
-    C["switchyard-core<br/>deterministic sim, integers only, no I/O<br/>guided PIBT planner + causal wait records"] -->|Event stream| T[switchyard-trace<br/>per-parcel spans, blame,<br/>Perfetto / OTLP / JSONL]
-    C -->|Event stream| A[switchyard-analysis<br/>metrics, CUSUM, resilience,<br/>replay RCA, Shapley, post-mortem]
+flowchart LR
+    S[Scenario + faults] --> C[core<br/>deterministic sim<br/>PIBT planner + wait records]
+    C --> T[trace<br/>per-parcel blame<br/>Perfetto / OTLP]
+    C --> A[analysis<br/>incident detection<br/>replays + Shapley<br/>post-mortem]
     T --> A
-    C --> W[switchyard-wasm]
-    T --> W
-    A --> W
-    W --> V[viewer<br/>TypeScript, Web Worker,<br/>swappable Renderer]
-    T --> L[switchyard CLI]
-    A --> L
+    A --> L[switchyard CLI]
+    A --> V[local viewer]
 ```
 
-**Planner and causal records.** Up to hundreds of robots are coordinated every tick by PIBT, a priority-inheritance planner from the multi-agent path finding literature, ported to Rust and steered by one-way-preferred lanes like city streets. Whenever a robot fails to make progress, the planner records why: blocked by a robot, yielded to one, a blocked cell, an unavailable chute, a busy station. Those records form a wait-for graph each tick; walking it gives the direct and the root cause of every delay. This is lock-wait attribution from databases, applied to robots. [ADR 0003](docs/adr/0003-guided-pibt-with-causal-records.md).
+Design decisions are in [docs/adr](docs/adr/); the full design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-**Traces.** The core's only output is a typed event stream, so every consumer is a pure function of it. The trace builder turns it into one trace per parcel. Phase spans (queued, awaiting robot, loading, travelling, blocked, chute wait) tile the parcel's lifetime exactly, and each blocked span names its direct blocker and root cause. [ADR 0004](docs/adr/0004-event-stream-and-trace-model.md).
+## Results
 
-**Chaos and the twin.** The fault catalog covers robot failure, aisle block, chute jam, induction outage, volume surge and scanner drift. Every experiment runs next to a fault-free twin with the same seed, so the comparison carries no noise. Random draws are keyed per parcel, so a fault only changes the parcels it touches. The resilience score reports lost parcels, maximum dip, time to recover and graceful-degradation ratio, next to baseline utilisation.
+| Check | Result |
+|---|---|
+| Planted incidents with one clear cause | **24 / 24** named correctly |
+| Hard incidents (near ties, overlapping and compounding faults), graded against an independent check | **44 / 48** main cause right; large interactions **24 / 24** |
+| Speed | 2 h of a 200-robot floor in **0.5 s**; a full post-mortem (96 replays) in **≈ 5 s** |
+| Determinism | identical state hash on Linux, Windows, macOS and WebAssembly, checked in CI |
+| Tests | 255 Rust tests and 58 viewer tests, plus property tests for collisions, parcel conservation and trace integrity |
 
-**Post-mortem engine (CP3, in progress).** A one-sided CUSUM on the throughput deficit against the twin raises an incident. Active faults and the top blame hotspots become a shortlist of at most six candidates. Each is replayed with that cause removed and ranked by the share of lost parcels it recovers. Exact Shapley values over the candidates (at most 64 parallel replays) split the blame when causes interact, and whatever is left is reported as unexplained. The output follows the Google SRE post-mortem template, and every number cites the replay behind it. [ADR 0005](docs/adr/0005-counterfactual-replay-rca.md).
+Small interactions, the ones under about 500 parcel-minutes, sit inside the floor's own noise. The report says so instead of guessing.
 
-Language choice and the WASM split: [ADR 0001](docs/adr/0001-rust-core-wasm-viewer.md). Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+![Averages invent fixes](docs/media/averages.png)
 
-## Engineering quality
+The most useful finding came from a bug. Two averages taken over different versions of the day made rerouting look better than removing the jam itself. Played the same day both ways, the two options tie. Any team that compares "days we did A" with "days we did B" can invent a fix this way. More findings: [docs/insights.md](docs/insights.md).
 
-- **Determinism contract** ([ADR 0002](docs/adr/0002-determinism-contract.md)). Integer-only sim state, no `HashMap` in the core (enforced by clippy), seeded ChaCha8 streams per concern, single-threaded sim, and a canonical state hash per run. CI runs the reference scenario on Linux, Windows and macOS and builds the `wasm32` target. Comparing the hash across all four is the stated V1 gate.
-- **Tests.** <!-- NUMBERS: total test count at V1 --> The CP1 gate counted 66 Rust tests plus 13 viewer tests. <!-- docs/checkpoints/v1-cp1.md, re-verification --> Property tests (`proptest`) cover the invariants that matter: no collisions, parcels conserved, and trace spans that tile each parcel's lifetime.
-- **Review.** Each checkpoint goes through an independent code review with experiments. The findings, including the critical ones, are published in [docs/checkpoints](docs/checkpoints/).
-- **Performance.** Two hours of the 200-robot medium hub simulate in 0.39 s in a release build. The 500-robot large hub takes about 1 s. A chaos run of 10 two-hour simulations (faulted runs and twins) takes 0.85 s with rayon. <!-- docs/checkpoints/v1-cp1.md, v1-cp2.md; measured on the dev machine -->
-- **Calibration.** Industry deployments run at roughly 25 to 50 parcels per robot per hour. The presets land inside that band: 38.7 (small, 40 robots), 31.4 (medium, 200) and 31.6 (large, 500). <!-- docs/checkpoints/v1-cp1.md -->
+## Run it
 
-## Status and roadmap
+**Download** a prebuilt `switchyard` binary for Windows, macOS or Linux from [Releases](https://github.com/kassem-kanjo/switchyard/releases), or build it from source with Rust (stable):
 
-**Now: V1 in progress.** V0 and checkpoint 1 (the floor and the planner) are done. Checkpoint 2 (traces, exporters, the fault catalog and the resilience score) is built and under review; its blame findings are being fixed. Checkpoint 3 (post-mortem engine and viewer features) is next. Current state: [docs/STATUS.md](docs/STATUS.md).
+```bash
+git clone https://github.com/kassem-kanjo/switchyard && cd switchyard
+cargo build --release -p switchyard-cli
+```
 
-V1 explains the twin, not a real floor. It has no real-site integration, no robot kinematics, no learned models, and deliberately simple visuals.
+Then:
 
-Ideas for V2:
-- A better renderer (PixiJS, WebGL or native Bevy) behind the existing `Renderer` interface.
-- LaCAM as a stuck-recovery planner.
-- Real-site integration: WES/WCS connectors and live telemetry.
-- Parquet export.
+```bash
+# Write a post-mortem for a chaos preset
+switchyard postmortem --scenario two-dead-robots-and-a-jam --ticks 14400 --out report.md
+
+# Simulate 2 hours of the 200-robot hub (1 tick = 0.5 s)
+switchyard run --scenario medium --ticks 14400
+
+# Inject your own faults and score the floor against its fault-free twin
+switchyard chaos --scenario medium --ticks 14400 \
+  --fault "robot-failure:robot=31,at=30m,for=20m" \
+  --fault "chute-jam:chute=12,at=30m,for=15m"
+
+# Export per-parcel traces and open them in https://ui.perfetto.dev
+switchyard export --scenario medium --ticks 14400 --format perfetto --parcels late:p95 --out traces.json
+```
+
+Presets: `small`, `medium`, `large`, plus the chaos presets `aisle-7-blocked`, `peak-surge` and `two-dead-robots-and-a-jam`. Fault kinds: `robot-failure`, `aisle-block`, `chute-jam`, `induction-outage`, `volume-surge`, `scanner-drift`.
+
+**Visual viewer.** To watch the floor, click a parcel's trace and read the post-mortem next to it, run the viewer locally. It needs Node 22:
+
+```bash
+cd viewer && npm ci && npm run dev
+```
+
+Full setup, including Windows: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+## How it was built, step by step
+
+Each stage is one reviewed pull request, so the history reads as the roadmap:
+
+| Stage | What it added |
+|---|---|
+| [Discovery](https://github.com/kassem-kanjo/switchyard/pull/1) | Research, product spec, architecture and decision records |
+| [V0](https://github.com/kassem-kanjo/switchyard/pull/2) | Walking skeleton: the sim, the CLI and the viewer, end to end |
+| [CP1](https://github.com/kassem-kanjo/switchyard/pull/3) | A floor that sorts: the guided PIBT planner and floor operations |
+| [CP2](https://github.com/kassem-kanjo/switchyard/pull/4) | Parcel traces with blame chains, the fault catalog, chaos runs and a resilience score |
+| [CP3](https://github.com/kassem-kanjo/switchyard/pull/5) | The post-mortem engine: incident detection, replays, Shapley blame, tested fixes |
+| [V1 depth](https://github.com/kassem-kanjo/switchyard/pull/27), [hardening](https://github.com/kassem-kanjo/switchyard/pull/28) | Per-cause noise bands, the reroute check and the security review |
+| [v1.0.0](https://github.com/kassem-kanjo/switchyard/releases/tag/v1.0.0) | The release, plus the [paper](https://github.com/kassem-kanjo/switchyard/pull/30) |
+
+Each checkpoint went through an independent review; the reports are in [docs/checkpoints](docs/checkpoints/).
 
 ## Repo map
 
-| Path | What is there |
+| Path | Contents |
 |---|---|
-| `crates/core` | Deterministic sim, planner, faults, causality, scenario presets |
-| `crates/trace` | Per-parcel traces, blame, exporters |
-| `crates/analysis` | Metrics, resilience, CUSUM, replay RCA, post-mortem |
-| `crates/cli` | The `switchyard` binary |
-| `crates/wasm` | WebAssembly facade for the viewer |
-| `viewer/` | TypeScript + Vite web app |
-| `scenarios/` | Scenario presets and chaos presets (kept in sync with the core by a test) |
-| `docs/` | [Product](docs/PRODUCT.md), [architecture](docs/ARCHITECTURE.md), [ADRs](docs/adr/), [research](docs/research/), [checkpoints](docs/checkpoints/), [development setup](docs/DEVELOPMENT.md) |
+| `crates/core` | Deterministic sim, PIBT planner, faults, causal wait records |
+| `crates/trace` | Per-parcel traces, blame chains, exporters |
+| `crates/analysis` | Incident detection, replays, Shapley attribution, post-mortem |
+| `crates/cli` | The `switchyard` command |
+| `crates/wasm`, `viewer/` | The local visual viewer |
+| `scenarios/` | Floor presets and chaos presets |
+| `docs/` | [Paper](docs/paper/switchyard-v1.pdf), [architecture](docs/ARCHITECTURE.md), [decision records](docs/adr/), [research](docs/research/), [checkpoint reviews](docs/checkpoints/), [insights](docs/insights.md) |
 
-## Licence
+## Limits
 
-[MIT](LICENSE).
+The floor is simulated, not connected to a real hub yet. The next step is running the same replays on a copy of a real shift from a hub's logs. Small interactions between faults stay inside the noise. Exact Shapley values grow exponentially with the number of causes, so incidents with many causes at once will need sampled attribution.
+
+## Built with AI
+
+Built by Kassem Kanjo, with a team of AI agents: cheap models wrote well-specified code, stronger models reviewed it, and an independent auditor checked every checkpoint. The audit findings are published in [docs/checkpoints](docs/checkpoints/). The paper has a section on what AI made possible here, and where a human still had to catch it.
+
+## License
+
+[MIT](LICENSE)
