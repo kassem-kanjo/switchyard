@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Switchyard: operations console (mockup)</title>
+<html lang="en"><head><meta charset="utf-8"><title>Switchyard Console</title>
 <style>
 :root{--bg:#1C2127;--panel:#252A31;--raised:#2F343C;--border:#383E47;--border2:#404854;--text:#F6F7F9;--muted:#ABB3BF;--accent:#2D72D2;--danger:#CD4246;--warn:#C87619;--ok:#238551;--mono:ui-monospace,Consolas,"Cascadia Mono",monospace}
 *{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -37,6 +37,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:6px 4px;b
 td.n{text-align:right;font-family:var(--mono)}
 .tl{grid-column:1/4;background:var(--panel);border-top:1px solid var(--border);padding:8px 14px 10px;position:relative}
 .obj{display:none}.obj.show{display:block}
+@media (max-width:900px){html,body{height:auto}.app{display:flex;flex-direction:column;height:auto}.top{flex-wrap:wrap;gap:8px;padding:8px 16px;height:auto}.rail,.insp{border:0;border-bottom:1px solid var(--border)}.canvas{height:60vw;min-height:260px}.legend{flex-wrap:wrap;right:12px}.tl{padding:8px 16px}.kpis{gap:16px}.kpi .v{font-size:22px}}
 </style></head><body>
 <div class="app">
   <div class="top">
