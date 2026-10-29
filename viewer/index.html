@@ -15,6 +15,7 @@
       <span class="lbl">Site</span><span id="site" class="sel">-</span>
       <label class="lbl">Scenario
         <select id="preset" class="sel">
+          <option value="" disabled hidden>Choose a scenario</option>
           <option value="small">small</option>
           <option value="medium">medium</option>
           <option value="large">large</option>
@@ -24,7 +25,7 @@
         </select>
       </label>
       <span class="sep"></span>
-      <div class="ctl" id="speeds" role="group" aria-label="Simulation speed">
+      <div class="ctl" id="speeds" role="group" aria-label="Simulation speed" title="1x is real time (one tick is half a second). Faster speeds skip ahead.">
         <button id="play" type="button" aria-label="Pause">❚❚</button>
         <button type="button" data-speed="1" class="on">1×</button>
         <button type="button" data-speed="4">4×</button>
@@ -36,10 +37,18 @@
       <span class="lbl">Shift time</span><span id="tick" class="mono">00:00:00</span>
     </header>
 
+    <div id="guide" class="guide" hidden aria-label="Guide"></div>
+
     <nav id="rail" class="rail" aria-label="Objects"></nav>
 
     <section id="floor" class="canvas" aria-label="Sortation floor">
       <div id="stage"><canvas id="canvas"></canvas><div id="focus" aria-hidden="true"></div></div>
+      <div id="empty" class="empty" hidden>
+        <h1>See an incident explained</h1>
+        <p>A chute jams and two robots die. Watch the floor, then read why.</p>
+        <button id="load-incident" type="button" class="primary">Load an incident</button>
+        <p class="alt">or pick a scenario above</p>
+      </div>
       <div class="hud"><span id="focus-chip" class="chip d" hidden></span><span id="fleet" class="chip" title="active / parked robots">active 0 / parked 0</span></div>
       <div id="legend" aria-label="Legend"></div>
     </section>

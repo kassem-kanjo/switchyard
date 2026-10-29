@@ -2,7 +2,7 @@ import { Canvas2DRenderer } from "./renderer/canvas2d";
 import { MockSource, type SimSource } from "./sim/source";
 import { legendEntries, activeParked } from "./legend";
 import { theme } from "./theme";
-import { parsePreset } from "./preset";
+import { FIRST_RUN_PRESET, hasPreset, isGuided, parsePreset } from "./preset";
 import { WasmSource } from "./sim/wasmSource";
 import "./ui/app.css";
 import "./ui/console/console.css";
@@ -26,6 +26,8 @@ import { consoleTimeline, dipVsTwin, shiftClock } from "./ui/console/consoleMode
 import { focusRect } from "./ui/console/floorFocus";
 import type { ObjectId } from "./ui/console/types";
 import { TickPacer } from "./sim/pacer";
+import { GuideStrip } from "./ui/console/GuideStrip";
+import { jumpTarget, reachedDip, speedAt } from "./ui/console/guidedRun";
 
 applyThemeVars();
 
@@ -60,14 +62,31 @@ async function openSource(): Promise<{ source: SimSource; services: Services }> 
   }
 }
 
+function loadPreset(name: string, guided = false): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("preset", name);
+  if (guided) url.searchParams.set("guided", "1");
+  else url.searchParams.delete("guided");
+  window.location.href = url.toString();
+}
+
+/** First run: nothing loaded yet. One button loads the incident and plays the guided sequence. */
+function showEmptyState(): void {
+  presetSel.value = "";
+  presetSel.addEventListener("change", () => loadPreset(presetSel.value));
+  document.getElementById("empty")!.hidden = false;
+  document.getElementById("rail")!.append(h("p", { class: "quiet" }, "Incidents, causes and fixes appear here once a run is loaded."));
+  document.getElementById("side")!.append(h("p", { class: "quiet" }, "Select an incident to see what caused it, what it cost and what would have fixed it."));
+  document.getElementById("timeline")!.append(h("p", { class: "quiet" }, "The timeline shows throughput against a fault-free baseline once a run is loaded."));
+  document.getElementById("load-incident")!.addEventListener("click", () => loadPreset(FIRST_RUN_PRESET, true));
+  for (const b of [playBtn, ...speedBtns]) b.disabled = true;
+}
+
 async function main(): Promise<void> {
+  if (!hasPreset(window.location.search)) return showEmptyState();
   const { source, services } = await openSource();
   presetSel.value = preset;
-  presetSel.addEventListener("change", () => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("preset", presetSel.value);
-    window.location.href = url.toString();
-  });
+  presetSel.addEventListener("change", () => loadPreset(presetSel.value));
   for (const e of legendEntries()) {
     const item = document.createElement("span");
     item.className = "item";
@@ -104,6 +123,10 @@ async function main(): Promise<void> {
   const faultPanel = new FaultPanel(panels.faults, services.faults, () => nowTick);
 
   // Console state: the post-mortem data and the one shared selection.
+  const guideEl = document.getElementById("guide") as HTMLDivElement;
+  guideEl.hidden = false;
+  const guide = new GuideStrip(guideEl);
+  let guidedRun = isGuided(window.location.search);
   let data: ConsoleData | null = null;
   let selected: ObjectId | null = "inc";
   const incidentHost = h("div");
@@ -177,6 +200,7 @@ async function main(): Promise<void> {
   };
 
   function select(id: ObjectId | null): void {
+    if (id !== null && id !== "inc" && selected !== id) guide.setStep(2);
     selected = id;
     rail.select(id);
     inspector.show(id, data);
@@ -222,6 +246,7 @@ async function main(): Promise<void> {
       return;
     }
     tabs.select("trace");
+    guide.setStep(1);
     renderer.highlight([id]);
     if (!carrying.includes(snap.robotState[id]!)) {
       tracePanel.message(`R${id} is not carrying a parcel. Click a robot that is.`);
@@ -233,7 +258,9 @@ async function main(): Promise<void> {
   });
 
   let playing = true;
-  let speed = 1;
+  let speed = guidedRun ? 4 : 1;
+  const showSpeed = () => speedBtns.forEach((o) => o.classList.toggle("on", Number(o.dataset.speed) === speed));
+  showSpeed();
   // Wall-clock pacing: 1x is real time (1 tick = 0.5 s), not "N ticks per frame".
   const pacer = new TickPacer();
   let pending = 0;
@@ -249,7 +276,8 @@ async function main(): Promise<void> {
   for (const b of speedBtns) {
     b.addEventListener("click", () => {
       speed = Number(b.dataset.speed);
-      speedBtns.forEach((o) => o.classList.toggle("on", o === b));
+      guidedRun = false; // the viewer took the controls
+      showSpeed();
     });
   }
 
@@ -266,7 +294,41 @@ async function main(): Promise<void> {
   new ResizeObserver(() => renderer.resize(canvas.clientWidth, canvas.clientHeight)).observe(canvas);
 
   let busy = false;
+  let jumped = false;
   async function frame(): Promise<void> {
+    if (guidedRun && data?.incident) {
+      const { dipPct, endMin } = data.incident;
+      if ((dipPct !== null && reachedDip(services.metrics.series(), dipPct)) || nowTick >= endMin * theme.ticksPerMinute) {
+        // The report's worst minute is in: stop here, refresh the chip, and show the incident card.
+        guidedRun = false;
+        playing = false;
+        pacer.reset();
+        showPlaying();
+        refreshSide();
+        select("inc");
+      }
+    }
+    if (guidedRun && !jumped && data?.incident) {
+      // Fast-forward in the worker without rendering, to just before the incident.
+      jumped = true;
+      busy = true;
+      try {
+        const n = jumpTarget(data.incident.startMin, theme.ticksPerMinute) - source.snapshot().tick;
+        if (n > 0) await source.step(n);
+        pacer.reset();
+      } catch (err) {
+        console.warn("fast-forward failed:", err);
+      } finally {
+        busy = false;
+      }
+    }
+    if (guidedRun && data?.incident) {
+      const next = speedAt(nowTick, data.incident.startMin, theme.ticksPerMinute);
+      if (next !== speed) {
+        speed = next;
+        showSpeed();
+      }
+    }
     if (playing) pending += pacer.take(performance.now(), speed);
     if (playing && !busy && pending > 0) {
       busy = true;

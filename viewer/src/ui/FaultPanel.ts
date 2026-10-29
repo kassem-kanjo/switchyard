@@ -30,7 +30,7 @@ export class FaultPanel {
       this.desc,
       this.fields,
       this.field(DURATION_KEY, "Lasts", "s", this.duration),
-      h("button", { type: "submit", class: "primary" }, "Inject at current tick"),
+      h("button", { type: "submit", class: "primary", title: "Break something on the live floor now, for example jam a chute, then watch what it costs." }, "Inject at current tick"),
       this.status,
     );
     form.addEventListener("submit", (e) => {

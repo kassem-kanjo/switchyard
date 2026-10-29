@@ -1,6 +1,6 @@
 /* Operations console layout and panes. Structure follows docs/design/mockups/console.html; colours come from theme.ts vars. */
 :root { --muted: var(--text-muted); --raised: var(--panel-raised); --border2: var(--border-strong); --mono: var(--font-mono); }
-.app { display: grid; grid-template-rows: 44px minmax(0, 1fr) 132px; grid-template-columns: 248px minmax(0, 1fr) 420px; height: 100vh; }
+.app { display: grid; grid-template-rows: 44px auto minmax(0, 1fr) 132px; grid-template-columns: 248px minmax(0, 1fr) 420px; height: 100vh; }
 .lbl { font-size: 10.5px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .sep { width: 1px; height: 20px; background: var(--border); }
@@ -115,3 +115,23 @@ button.link { color: #8ABBFF; }
 .tl-label.start { transform: none; }
 .tl-label.middle { transform: translateX(-50%); }
 .tl-label.end { transform: translateX(-100%); }
+
+/* Grid rows are explicit so the guide strip can come and go without moving the panes. */
+.top { grid-row: 1; }
+.guide { grid-row: 2; grid-column: 1 / 4; display: flex; align-items: center; gap: 10px; padding: 7px 14px; background: var(--raised); border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--muted); }
+.guide[hidden] { display: none; }
+.guide-step.on { color: var(--text); font-weight: 700; }
+.guide-sep { color: var(--muted); }
+.guide-x { margin-left: auto; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 6px; }
+.guide-x:hover { color: var(--text); }
+.rail { grid-row: 3; } .canvas { grid-row: 3; } .insp { grid-row: 3; } .tl { grid-row: 4; }
+
+/* First run: empty state over the floor, quiet empty states in the rail and inspector. */
+.empty { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; background: #161A1F; padding: 24px; }
+.empty[hidden] { display: none; }
+.empty h1 { margin: 0; font-size: 22px; font-weight: 600; }
+.empty p { margin: 0; color: var(--muted); font-size: 14px; max-width: 34em; }
+.empty p.alt { font-size: 12px; margin-top: 4px; }
+.empty button.primary { margin-top: 8px; padding: 10px 22px; font-size: 14px; }
+.quiet { margin: 0; padding: 16px 14px; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+@media (max-width: 900px) { .top, .guide, .rail, .canvas, .insp, .tl { grid-row: auto; } }

@@ -10,3 +10,13 @@ export function parsePreset(search: string, warn: (msg: string) => void = consol
   warn(`Unknown preset "${raw}", falling back to "small" (valid: ${PRESETS.join(", ")})`);
   return "small";
 }
+
+/** True when the URL names a preset: with none, the viewer shows the first-run empty state instead of a run. */
+export function hasPreset(search: string): boolean {
+  const raw = new URLSearchParams(search).get("preset");
+  return raw !== null && raw !== "";
+}
+
+/** The preset the first-run button loads, and the URL flag that asks for the guided sequence. */
+export const FIRST_RUN_PRESET: Preset = "two-dead-robots-and-a-jam";
+export const isGuided = (search: string): boolean => new URLSearchParams(search).get("guided") === "1";

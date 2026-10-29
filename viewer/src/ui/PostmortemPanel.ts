@@ -67,7 +67,7 @@ export function renderReport(md: string, into: HTMLElement): void {
 export class PostmortemPanel {
   private readonly source = h("p", { class: "source note" });
   private readonly out = h("div", { class: "report" });
-  private readonly button = h("button", { type: "button", class: "primary" }, "Analyse this run now");
+  private readonly button = h("button", { type: "button", class: "primary", title: "Replays this run with and without each fault to find what caused the loss and what would have fixed it." }, "Analyse this run now");
 
   constructor(
     root: HTMLElement,
