@@ -1,16 +1,29 @@
 # Switchyard
 
-**Find out what really broke a robotic sort floor, and what it cost.**
+**See when your sort floor goes wrong, why, and what fixes it.**
 
 [![CI](https://github.com/kassem-kanjo/switchyard/actions/workflows/ci.yml/badge.svg)](https://github.com/kassem-kanjo/switchyard/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/kassem-kanjo/switchyard)](https://github.com/kassem-kanjo/switchyard/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black.svg)](LICENSE)
 
-![Switchyard: a chute jams and two robots die, throughput dips, and the post-mortem explains it](docs/media/demo.gif)
+<!-- Hero GIF for later: docs/media/demo.gif -->
+![The Switchyard console: the floor, the incident headline and the cause-by-cause breakdown](docs/checkpoints/img/v2-console-1440.png)
 
-When a parcel hub suddenly loses a third of its throughput, nobody can say for sure what caused it or how much each problem cost. Switchyard answers that by **replaying the shift**. It is a deterministic digital twin of a robot sort floor. It re-runs the same day with each problem removed, measures what comes back, and writes the incident post-mortem for you.
+When a parcel hub loses a third of its throughput, nobody can say for sure what caused it or what each problem cost. Switchyard shows every robot and parcel on your floor, traces each delay to the robot, chute or station that caused it, and re-runs the same shift with each problem removed to measure what comes back. You get the cause-by-cause cost, honest error bars, and the fix that would have recovered the most, before you spend anything.
 
-🎬 **Video:** [Switchyard in 52 seconds](docs/media/switchyard-demo.mp4) &nbsp;·&nbsp; 📄 **Paper:** [Replaying the Shift](docs/paper/switchyard-v1.pdf) (3 pages: how it works and what it found)
+It is for operations leaders who own throughput and service levels, and for robotics vendors who have to explain an incident to their customer.
+
+**Video:** [Switchyard in 52 seconds](docs/media/switchyard-demo.mp4) | **Paper:** [Proving what broke a robotic sort floor](docs/paper/switchyard-v1.pdf) (3 pages: how it works and what it found)
+
+## Run it in one command
+
+[Download](https://github.com/kassem-kanjo/switchyard/releases) the `switchyard` binary for Windows, macOS or Linux, then:
+
+```bash
+switchyard view
+```
+
+This serves the console on your own machine (localhost only). Nothing leaves the computer and nothing needs installing.
 
 ## What it does
 
@@ -29,9 +42,9 @@ The two robot failures are too close to rank, so the report calls them a tie ins
 
 ## How it works
 
-1. **A twin you can rewind.** The simulation is fully deterministic: the same inputs give exactly the same shift, bit for bit, on Windows, macOS, Linux and WebAssembly. So any difference between two runs comes from the one thing that changed.
+1. **A simulation you can rewind.** The simulation is fully deterministic: the same inputs give exactly the same shift, bit for bit, on Windows, macOS, Linux and WebAssembly. So any difference between two runs comes from the one thing that changed.
 2. **Replay the day without each problem.** For an incident, every combination of active faults is removed and the shift is replayed from the nearest checkpoint. Blame is split fairly with the Shapley value from game theory. The same replays show whether two faults overlapped or made each other worse, and test candidate fixes on the real day.
-3. **Honest error bars.** A deterministic twin gives one exact answer, which looks precise but isn't: remove a fault and the robots take slightly different paths. So Switchyard replays several equally plausible versions of the day (one robot pauses for half a second at a moment that shouldn't matter) and reports the spread. Anything inside it is called a tie or "nothing measurable".
+3. **Honest error bars.** A deterministic simulation gives one exact answer, which looks precise but isn't: remove a fault and the robots take slightly different paths. So Switchyard replays several equally plausible versions of the day (one robot pauses for half a second at a moment that shouldn't matter) and reports the spread. Anything inside it is called a tie or "nothing measurable".
 
 ```mermaid
 flowchart LR
@@ -61,9 +74,9 @@ Small interactions, the ones under about 500 parcel-minutes, sit inside the floo
 
 The most useful finding came from a bug. Two averages taken over different versions of the day made rerouting look better than removing the jam itself. Played the same day both ways, the two options tie. Any team that compares "days we did A" with "days we did B" can invent a fix this way. More findings: [docs/insights.md](docs/insights.md).
 
-## Run it
+## Command-line use
 
-**Download** a prebuilt `switchyard` binary for Windows, macOS or Linux from [Releases](https://github.com/kassem-kanjo/switchyard/releases), or build it from source with Rust (stable):
+If you prefer to build from source (Rust, stable):
 
 ```bash
 git clone https://github.com/kassem-kanjo/switchyard && cd switchyard
@@ -79,7 +92,7 @@ switchyard postmortem --scenario two-dead-robots-and-a-jam --ticks 14400 --out r
 # Simulate 2 hours of the 200-robot hub (1 tick = 0.5 s)
 switchyard run --scenario medium --ticks 14400
 
-# Inject your own faults and score the floor against its fault-free twin
+# Inject your own faults and score the floor against its fault-free run
 switchyard chaos --scenario medium --ticks 14400 \
   --fault "robot-failure:robot=31,at=30m,for=20m" \
   --fault "chute-jam:chute=12,at=30m,for=15m"
@@ -90,7 +103,7 @@ switchyard export --scenario medium --ticks 14400 --format perfetto --parcels la
 
 Presets: `small`, `medium`, `large`, plus the chaos presets `aisle-7-blocked`, `peak-surge` and `two-dead-robots-and-a-jam`. Fault kinds: `robot-failure`, `aisle-block`, `chute-jam`, `induction-outage`, `volume-surge`, `scanner-drift`.
 
-**Visual viewer.** To watch the floor, click a parcel's trace and read the post-mortem next to it, run the viewer locally. It needs Node 22:
+**Viewer from source.** `switchyard view` already includes the console. To develop it, you need Node 22:
 
 ```bash
 cd viewer && npm ci && npm run dev
@@ -111,6 +124,10 @@ Each stage is one reviewed pull request, so the history reads as the roadmap:
 | [CP3](https://github.com/kassem-kanjo/switchyard/pull/5) | The post-mortem engine: incident detection, replays, Shapley blame, tested fixes |
 | [V1 depth](https://github.com/kassem-kanjo/switchyard/pull/27), [hardening](https://github.com/kassem-kanjo/switchyard/pull/28) | Per-cause noise bands, the reroute check and the security review |
 | [v1.0.0](https://github.com/kassem-kanjo/switchyard/releases/tag/v1.0.0) | The release, plus the [paper](https://github.com/kassem-kanjo/switchyard/pull/30) |
+| [V2 plan](https://github.com/kassem-kanjo/switchyard/pull/37), [wireframes](https://github.com/kassem-kanjo/switchyard/pull/41) | Design spec, ADR 0007, research and wireframes for review |
+| [V2 CP1](https://github.com/kassem-kanjo/switchyard/pull/39) | Headline card, folded report, plain wording |
+| [V2 CP2](https://github.com/kassem-kanjo/switchyard/pull/40), [#45](https://github.com/kassem-kanjo/switchyard/pull/45), [#46](https://github.com/kassem-kanjo/switchyard/pull/46), [#48](https://github.com/kassem-kanjo/switchyard/pull/48) | Design tokens, chart, floor legibility, the operations console layout, first-run guide |
+| [`switchyard view`](https://github.com/kassem-kanjo/switchyard/pull/38), [release builds](https://github.com/kassem-kanjo/switchyard/pull/47) | The console served from the CLI binary; Intel-Mac cross-build |
 
 Each checkpoint went through an independent review; the reports are in [docs/checkpoints](docs/checkpoints/).
 

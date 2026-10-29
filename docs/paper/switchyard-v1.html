@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Replaying the Shift</title>
+<title>Proving what broke a robotic sort floor</title>
 <style>
   @page { size: A4; margin: 17mm 20mm 16mm 20mm; }
   html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -26,11 +26,11 @@
 </head>
 <body>
 
-<h1>Replaying the Shift</h1>
+<h1>Proving what broke a robotic sort floor</h1>
 <p class="sub">How to find out what really broke a robotic sort floor, and what it cost</p>
 <p class="meta">Kassem Kanjo &nbsp;·&nbsp; October 2026 &nbsp;·&nbsp; Switchyard v1.0</p>
 
-<div class="tldr"><b>In short.</b>&nbsp; When a sort hub suddenly loses a third of its throughput, nobody can say for sure what caused it or what each problem cost. I built a digital twin of a robot sort floor that answers that by <i>replaying the shift</i>: it re-runs the same day with each problem removed and measures the difference. It names the right cause in 24 of 24 planted incidents and 44 of 48 hard ones, says “we can’t tell” when it can’t, and it exposed a common mistake that makes bad fixes look good.</div>
+<div class="tldr"><b>In short.</b>&nbsp; When a sort hub suddenly loses a third of its throughput, nobody can say for sure what caused it or what each problem cost. I built a simulator of a robot sort floor that answers that by re-running the same shift: it replays the same day with each problem removed and measures the difference. It names the right cause in 24 of 24 planted incidents and 44 of 48 hard ones, says “we can’t tell” when it can’t, and it exposed a common mistake that makes bad fixes look good.</div>
 
 <h2>The problem</h2>
 <p>A modern hub runs a few hundred robots carrying parcels from induction stations to chutes. When something breaks, a robot dies in an aisle or a chute jams, the damage doesn’t stay where it happened. It spreads as traffic through robots that never failed. By the time the throughput chart drops, the alarm points at the symptom. When two or three things go wrong in the same ten minutes, which is normal on a busy shift, nobody can say how much each one cost. So the fix that gets funded is whoever argues best in the meeting.</p>
@@ -40,9 +40,9 @@
 <p>Software companies solved this years ago. When a large web service goes down, engineers trace every request, break things on purpose to find weak spots, and write a post-mortem that says exactly what failed and what to change. My starting point was simple: <b>a sort floor is a distributed system</b>. Robots are the servers, aisles are shared resources, a jam is an outage, and a parcel is a request with a deadline. If that’s true, the whole software toolkit should work on a warehouse. Switchyard is that bet.</p>
 
 <h2>How it works</h2>
-<p><b>A twin you can rewind.</b> Switchyard simulates the floor robot by robot, and it is fully deterministic: the same inputs always give exactly the same shift, on any computer. That sounds like a technical detail, but everything depends on it. If the day always plays out the same way, then any difference between two runs comes from the one thing I changed. Every robot that waits also records <i>why</i> it waited, so every late parcel shows where its time went and who held it up. That turned up a surprise: late parcels are rarely stuck in robot traffic. Parcel 4022 took 8 min 38 s, and 8 min 7 s of that was waiting in line at its station; its traffic blocks lasted seconds.</p>
+<p><b>A simulation you can rewind.</b> Switchyard simulates the floor robot by robot, and it is fully deterministic: the same inputs always give exactly the same shift, on any computer. That sounds like a technical detail, but everything depends on it. If the day always plays out the same way, then any difference between two runs comes from the one thing I changed. Every robot that waits also records <i>why</i> it waited, so every late parcel shows where its time went and who held it up. That turned up a surprise: late parcels are rarely stuck in robot traffic. Parcel 4022 took 8 min 38 s, and 8 min 7 s of that was waiting in line at its station; its traffic blocks lasted seconds.</p>
 <p><b>Replay the day without each problem.</b> When throughput drops, Switchyard finds the incident, lists every fault that was active, and replays the shift with each combination of those faults removed. Each replay shows how much delay that removal would have saved. Delay is measured in parcel-minutes: one parcel one minute late is one parcel-minute. The blame is then split fairly with the Shapley value from game theory, the standard way to divide credit between players who worked together. The same replays show whether two faults overlapped (fixing one makes the other matter less) or compounded (together they did more damage than apart). Candidate fixes, like rerouting a chute or clearing dead robots faster, are tested the same way, on the real day.</p>
-<p><b>Honest error bars from a system with no randomness.</b> This is the part I’m proudest of. A deterministic twin gives one exact answer, which looks precise but isn’t. Remove a fault and the robots take slightly different paths, so a saving of 947 parcel-minutes could just as easily have been 900 or 1,000. To measure that, I make the twin generate its own alternative days: I replay the real shift several times with one robot pausing for half a second at a moment that shouldn’t matter, and keep only the copies that actually play out differently. Every answer is then measured across all of those days. The spread is the error bar. If two causes are within it, the report calls them a tie, and if a fix is within it, the report says the fix did nothing measurable.</p>
+<p><b>Honest error bars from a system with no randomness.</b> This is the part I’m proudest of. A deterministic simulation gives one exact answer, which looks precise but isn’t. Remove a fault and the robots take slightly different paths, so a saving of 947 parcel-minutes could just as easily have been 900 or 1,000. To measure that, I make the simulator generate its own alternative days: I replay the real shift several times with one robot pausing for half a second at a moment that shouldn’t matter, and keep only the copies that actually play out differently. Every answer is then measured across all of those days. The spread is the error bar. If two causes are within it, the report calls them a tie, and if a fix is within it, the report says the fix did nothing measurable.</p>
 
 <h2>What it found</h2>
 <p>Figure 1 is one real incident: a chute jams and two robots die in the same minute. Throughput drops 47 %, the incident costs 6,264 parcel-minutes, and 110 parcels end up more than ten minutes late. Switchyard runs 96 replays and writes the report in under four seconds.</p>
@@ -142,7 +142,7 @@
 <p>I also ran the build like a small company of AI agents. Cheap models wrote well-defined code, stronger models reviewed it, and an independent auditor reported only to me. The auditor caught real mistakes, including labels that were the wrong way round and a headline number that quietly showed an average instead of what actually happened. But the AI was also the one that rigged the first test to score 100 %, and it took a human asking “does this test actually test anything?” to catch it. AI widens what one person can build across fields. It doesn’t replace someone deciding what counts as true.</p>
 
 <h2>What’s next</h2>
-<p>Today the floor is simulated. The next step is to connect the twin to a real hub’s logs, so the same replays run on a copy of an actual shift. After that, the focus is the report itself: one plain sentence at the top that a shift manager can act on in ten seconds.</p>
+<p>Today the floor is simulated. The next step is to connect the simulator to a real hub’s logs, so the same replays run on a copy of an actual shift. After that, the focus is the report itself: one plain sentence at the top that a shift manager can act on in ten seconds.</p>
 
 <div class="refs">
 <p>Code, design records and every test in this paper: github.com/kassem-kanjo/switchyard (v1.0). Robot planning: Okumura et al., PIBT, <i>Artificial Intelligence</i>, 2022. Blame splitting: Shapley, “A value for n-person games”, 1953; interactions: Grabisch &amp; Roubens, 1999. Incident alarms: Page, CUSUM, <i>Biometrika</i>, 1954. Post-mortem practice: Beyer et al., <i>Site Reliability Engineering</i>, O’Reilly, 2016.</p>
