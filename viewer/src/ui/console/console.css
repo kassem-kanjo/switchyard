@@ -81,7 +81,7 @@ button.link { color: #8ABBFF; }
 /* Timeline */
 .tl { display: flex; flex-direction: column; grid-column: 1 / 4; background: var(--panel); border-top: 1px solid var(--border); padding: 8px 14px 10px; position: relative; min-width: 0; }
 .tl-head { display: flex; justify-content: space-between; }
-.tl svg { flex: 1; min-height: 0; display: block; touch-action: none; cursor: ew-resize; }
+.tl svg { display: block; touch-action: none; cursor: ew-resize; }
 
 /* Narrow screens: stack the panes, as the mockup does */
 @media (max-width: 900px) {
@@ -104,3 +104,14 @@ button.link { color: #8ABBFF; }
 #panel-selection .report { order: 1; }
 #panel-selection .pm-top { order: 2; padding-top: 4px; }
 #panel-selection > div:nth-child(2) > .note { order: 3; margin: 0 16px 16px; }
+
+/* Timeline labels are HTML over the svg so their size does not follow the svg's stretch. */
+.tl-plot { position: relative; flex: 1; min-height: 0; }
+.tl-plot svg { position: absolute; inset: 0 0 14px 0; width: 100%; height: calc(100% - 14px); }
+.tl-labels { position: absolute; inset: 0; pointer-events: none; font: 12px var(--mono); color: var(--muted); }
+.tl-label { position: absolute; white-space: nowrap; }
+.tl-label.axis { bottom: 0; }
+.tl-label.caption { top: 4%; color: #FA999C; }
+.tl-label.start { transform: none; }
+.tl-label.middle { transform: translateX(-50%); }
+.tl-label.end { transform: translateX(-100%); }

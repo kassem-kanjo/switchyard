@@ -28,23 +28,11 @@ function svgNode<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Attrs): SV
   return el;
 }
 
-/** Text label in the mono baseline style, built as a text node (never parsed as HTML). */
-function svgText(x: number, y: number, anchor: string, content: string, fill = "#ABB3BF", size = 12): SVGTextElement {
-  const t = svgNode("text", {
-    x,
-    y,
-    "text-anchor": anchor,
-    "font-family": "Consolas,monospace",
-    "font-size": size,
-    fill,
-  });
-  t.textContent = content;
-  return t;
-}
-
 export class Timeline {
   private readonly svg: SVGSVGElement;
   private readonly hint: HTMLSpanElement;
+  /** Labels are HTML over the svg: the svg stretches to any width, and text in it would stretch too. */
+  private readonly labels: HTMLDivElement;
   private readonly onScrub: ((min: number) => void) | undefined;
   private readonly onSelect: ((id: string) => void) | undefined;
   private model: TimelineModel | null = null;
@@ -92,7 +80,12 @@ export class Timeline {
     this.svg.addEventListener("pointerup", release);
     this.svg.addEventListener("pointercancel", release);
 
-    root.append(head, this.svg);
+    this.labels = document.createElement("div");
+    this.labels.className = "tl-labels";
+    const plot = document.createElement("div");
+    plot.className = "tl-plot";
+    plot.append(this.svg, this.labels);
+    root.append(head, plot);
   }
 
   static readonly HINT = "drag to read any minute";
@@ -106,6 +99,7 @@ export class Timeline {
     this.model = model;
     const svg = this.svg;
     svg.replaceChildren();
+    this.labels.replaceChildren();
 
     const bandX0 = model.incident ? xOfMin(model, model.incident.startMin) : 0;
     const bandX1 = model.incident ? xOfMin(model, model.incident.endMin) : 0;
@@ -187,13 +181,13 @@ export class Timeline {
     }
 
     // Axis ends plus the incident edges, all in the baseline strip.
-    svg.append(svgText(2, 99, "start", formatMin(0)));
-    if (model.totalMin > 0) svg.append(svgText(TL_W - 2, 99, "end", formatMin(model.totalMin)));
+    this.label(2, "start", formatMin(0));
+    if (model.totalMin > 0) this.label(TL_W - 2, "end", formatMin(model.totalMin));
     if (model.incident) {
-      svg.append(svgText(bandX0 + 2, 99, "start", formatMin(model.incident.startMin)));
-      svg.append(svgText(bandX1 - 2, 99, "end", formatMin(model.incident.endMin)));
+      this.label(bandX0 + 2, "start", formatMin(model.incident.startMin));
+      this.label(bandX1 - 2, "end", formatMin(model.incident.endMin));
       if (model.incidentCaption) {
-        svg.append(svgText((bandX0 + bandX1) / 2, 18, "middle", model.incidentCaption, "#FA999C"));
+        this.label((bandX0 + bandX1) / 2, "middle", model.incidentCaption, "caption");
       }
     }
 
@@ -211,6 +205,15 @@ export class Timeline {
         }),
       );
     }
+  }
+
+  /** A mono label at svg x (viewBox units): along the bottom edge, or a coloured caption near the top. */
+  private label(x: number, anchor: "start" | "middle" | "end", text: string, kind: "axis" | "caption" = "axis"): void {
+    const el = document.createElement("span");
+    el.className = `tl-label ${kind} ${anchor}`;
+    el.style.left = `${(x / TL_W) * 100}%`;
+    el.textContent = text;
+    this.labels.append(el);
   }
 
   private emitScrub(ev: PointerEvent): void {
