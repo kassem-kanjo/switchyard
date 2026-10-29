@@ -16,9 +16,16 @@ export interface SnapshotView {
   robotState: Uint8Array;
 }
 
+export interface FloorMarks {
+  /** Cell indices (row-major) of jammed chutes. */
+  jammedCells: number[];
+}
+
 export interface Renderer {
   init(canvas: HTMLCanvasElement, layout: LayoutView): void;
   draw(snap: SnapshotView): void;
   highlight(robotIds: number[]): void;
   resize(w: number, h: number): void;
+  setMarks?(marks: FloorMarks): void;
+  setReducedMotion?(on: boolean): void;
 }

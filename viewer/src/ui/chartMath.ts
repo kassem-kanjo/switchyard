@@ -86,3 +86,48 @@ export function formatReadout(r: HoverReadout): string {
   }
   return parts.join(" · ");
 }
+
+/** The deepest relative shortfall against the twin inside [from, to] (inclusive point indices), or null. */
+export function deepestDip(
+  delivered: readonly number[],
+  twin: readonly number[] | undefined,
+  from: number,
+  to: number,
+): { index: number; pct: number } | null {
+  if (!twin) return null;
+  let best: { index: number; pct: number } | null = null;
+  for (let i = Math.max(0, Math.ceil(from)); i <= Math.min(to, delivered.length - 1); i++) {
+    const t = twin[i];
+    const d = delivered[i];
+    if (t === undefined || d === undefined || t <= 0) continue;
+    const pct = Math.round(((t - d) / t) * 100);
+    if (pct > 0 && (best === null || pct > best.pct)) best = { index: i, pct };
+  }
+  return best;
+}
+
+/**
+ * Half-width of the twin's noise band: the standard deviation of (delivered - twin) over the points before
+ * the first fault, where the two lines differ only by chance. Falls back to the twin's own spread.
+ */
+export function noiseHalfWidth(delivered: readonly number[], twin: readonly number[], firstFaultIndex: number): number {
+  const end = Math.max(0, Math.min(delivered.length, Math.floor(firstFaultIndex)));
+  const diffs: number[] = [];
+  for (let i = 0; i < end; i++) diffs.push((delivered[i] ?? 0) - (twin[i] ?? 0));
+  const sample = diffs.length >= 3 ? diffs : twin.slice(0, Math.max(end, 3));
+  if (sample.length < 2) return 0;
+  const mean = sample.reduce((a, b) => a + b, 0) / sample.length;
+  return Math.sqrt(sample.reduce((a, b) => a + (b - mean) ** 2, 0) / sample.length);
+}
+
+/** Merge overlapping or touching fault windows into the incident windows the chart shades. */
+export function mergeWindows<T extends { startTick: number; endTick: number }>(faults: readonly T[]): { startTick: number; endTick: number }[] {
+  const sorted = [...faults].sort((a, b) => a.startTick - b.startTick);
+  const out: { startTick: number; endTick: number }[] = [];
+  for (const f of sorted) {
+    const last = out[out.length - 1];
+    if (last && f.startTick <= last.endTick) last.endTick = Math.max(last.endTick, f.endTick);
+    else out.push({ startTick: f.startTick, endTick: f.endTick });
+  }
+  return out;
+}

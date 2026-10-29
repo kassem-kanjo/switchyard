@@ -1,5 +1,6 @@
 import { theme, type Theme } from "../theme";
-import { CellKind, type LayoutView, type Renderer, type SnapshotView } from "./Renderer";
+import { hatchSegments, ringPhase, ringRadius } from "./marks";
+import { CellKind, RobotState, type FloorMarks, type LayoutView, type Renderer, type SnapshotView } from "./Renderer";
 import { fitToCanvas, type FitTransform } from "./fit";
 
 export class Canvas2DRenderer implements Renderer {
@@ -13,6 +14,8 @@ export class Canvas2DRenderer implements Renderer {
   private dpr = 1;
   private highlighted = new Set<number>();
   private last: SnapshotView | null = null;
+  private marks: FloorMarks | null = null;
+  private reducedMotion = false;
 
   constructor(private readonly th: Theme = theme) {}
 
@@ -22,6 +25,9 @@ export class Canvas2DRenderer implements Renderer {
     this.canvas = canvas;
     this.ctx = ctx;
     this.layout = layout;
+    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+      this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    }
     this.resize(canvas.clientWidth, canvas.clientHeight);
   }
 
@@ -40,13 +46,44 @@ export class Canvas2DRenderer implements Renderer {
     this.highlighted = new Set(robotIds);
   }
 
+  setMarks(marks: FloorMarks): void {
+    this.marks = marks;
+  }
+
+  setReducedMotion(on: boolean): void {
+    this.reducedMotion = on;
+  }
+
   draw(snap: SnapshotView): void {
     this.last = snap;
-    const { ctx, th, fit, dpr } = this;
+    const { ctx, th, fit, dpr, layout } = this;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = th.background;
     ctx.fillRect(0, 0, this.cssW, this.cssH);
     if (this.grid) ctx.drawImage(this.grid, 0, 0, this.cssW, this.cssH);
+
+    const marks = this.marks;
+    if (marks) {
+      for (const cell of marks.jammedCells) {
+        if (!Number.isInteger(cell) || cell < 0 || cell >= layout.width * layout.height) continue;
+        const x = fit.offsetX + (cell % layout.width) * fit.scale;
+        const y = fit.offsetY + Math.floor(cell / layout.width) * fit.scale;
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = th.ui.warn;
+        ctx.fillRect(x, y, fit.scale, fit.scale);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = th.ui.warn;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (const [x1, y1, x2, y2] of hatchSegments(x, y, fit.scale, 4)) {
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
     const size = fit.scale * th.robotScale;
     const inset = (fit.scale - size) / 2;
     const n = snap.robotState.length;
@@ -66,6 +103,20 @@ export class Canvas2DRenderer implements Renderer {
         ctx.strokeRect(x - 1, y - 1, size + 2, size + 2);
       }
     }
+
+    const { r, alpha } = ringRadius(fit.scale, ringPhase(performance.now()), this.reducedMotion);
+    for (let i = 0; i < n; i++) {
+      if (snap.robotState[i] !== RobotState.Failed) continue;
+      const cx = fit.offsetX + snap.robotXY[2 * i]! * fit.scale + fit.scale / 2;
+      const cy = fit.offsetY + snap.robotXY[2 * i + 1]! * fit.scale + fit.scale / 2;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = th.ui.danger;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }
 
   /** Static floor, cached on an offscreen canvas at device resolution. */

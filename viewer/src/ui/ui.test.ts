@@ -1,6 +1,6 @@
 import { theme } from "../theme";
 import { describe, expect, it, vi } from "vitest";
-import { formatReadout, hoverReadout, indexAt, makeScale, niceCeil, tickToIndex, yTicks } from "./chartMath";
+import { deepestDip, formatReadout, hoverReadout, indexAt, makeScale, mergeWindows, niceCeil, noiseHalfWidth, tickToIndex, yTicks } from "./chartMath";
 import { blameChain, describeSpan, formatDuration, parseParcelId, summarize } from "./traceFormat";
 import { DURATION_KEY, remainingFraction, validateFault } from "./faultValidation";
 import { parseInline, parseMarkdown, renderMarkdown } from "./markdown";
@@ -332,4 +332,28 @@ describe("precomputed post-mortem reports (public/reports)", () => {
       }
     });
   }
+});
+
+describe("chart annotations", () => {
+  it("merges overlapping fault windows", () => {
+    expect(mergeWindows([{ startTick: 50, endTick: 90 }, { startTick: 10, endTick: 60 }, { startTick: 100, endTick: 120 }])).toEqual([
+      { startTick: 10, endTick: 90 },
+      { startTick: 100, endTick: 120 },
+    ]);
+  });
+  it("finds the deepest dip against the twin inside the window", () => {
+    const twin = [100, 100, 100, 100, 100];
+    const actual = [100, 90, 53, 70, 100];
+    expect(deepestDip(actual, twin, 1, 3)).toEqual({ index: 2, pct: 47 });
+  });
+  it("returns null without a twin or without a shortfall", () => {
+    expect(deepestDip([1, 2], undefined, 0, 1)).toBeNull();
+    expect(deepestDip([100, 101], [100, 100], 0, 1)).toBeNull();
+  });
+  it("measures noise only before the first fault", () => {
+    const twin = [10, 10, 10, 10, 10, 10];
+    const actual = [11, 9, 11, 9, 0, 0];
+    expect(noiseHalfWidth(actual, twin, 4)).toBeCloseTo(1, 5);
+    expect(noiseHalfWidth([5], [5], 1)).toBe(0);
+  });
 });
