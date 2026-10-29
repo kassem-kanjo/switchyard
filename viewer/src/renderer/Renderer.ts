@@ -14,6 +14,10 @@ export interface SnapshotView {
   robotXY: Uint16Array;
   /** One RobotState per robot. */
   robotState: Uint8Array;
+  /** Where each robot is heading, x0,y0,...; 65535 means none. Absent on the mock source. */
+  robotGoalXY?: Uint16Array;
+  /** Consecutive ticks each robot has been waiting. Absent on the mock source. */
+  robotWaited?: Uint32Array;
 }
 
 export interface FloorMarks {
@@ -28,4 +32,10 @@ export interface Renderer {
   resize(w: number, h: number): void;
   setMarks?(marks: FloorMarks): void;
   setReducedMotion?(on: boolean): void;
+  /** Dim every robot not in `ids` to 25 %; an empty array clears focus. */
+  setFocus?(ids: number[]): void;
+  /** Robot drawn under a point in canvas CSS pixels (uses the gliding position), or null. */
+  pickAt?(px: number, py: number): number | null;
+  /** Show the hover label for this robot (null hides it). The renderer draws the label itself. */
+  setHover?(id: number | null): void;
 }

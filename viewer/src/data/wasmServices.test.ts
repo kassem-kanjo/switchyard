@@ -178,6 +178,8 @@ const snapshot = (series?: string): WorkerResponse => ({
   tick: 10,
   robotXY: new Uint16Array(0),
   robotState: new Uint8Array(0),
+  robotGoalXY: new Uint16Array(0),
+  robotWaited: new Uint32Array(0),
   stats: { tick: 10, arrived: 0, queued: 0, in_flight: 0, delivered: 0, mis_sorted: 0, throughput_per_hour_milli: 0 },
   ...(series === undefined ? {} : { series }),
 });

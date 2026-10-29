@@ -70,6 +70,8 @@ async function handle(req: WorkerRequest): Promise<void> {
     const tick = sim.tick();
     const robotXY = sim.robot_xy();
     const robotState = sim.robot_state();
+    const robotGoalXY = sim.robot_goal_xy();
+    const robotWaited = sim.robot_waited();
     const due = lastSeriesTick === null || tick - lastSeriesTick >= SERIES_EVERY_TICKS;
     if (due) lastSeriesTick = tick;
     post(
@@ -78,10 +80,12 @@ async function handle(req: WorkerRequest): Promise<void> {
         tick,
         robotXY,
         robotState,
+        robotGoalXY,
+        robotWaited,
         stats: stats(sim),
         ...(due ? { series: sim.metrics_json() } : {}),
       },
-      [robotXY.buffer, robotState.buffer],
+      [robotXY.buffer, robotState.buffer, robotGoalXY.buffer, robotWaited.buffer],
     );
   } else if (req.type === "rpc") {
     post({ type: "rpc", result: rpc(sim, req) });
