@@ -2,7 +2,7 @@ import { Canvas2DRenderer } from "./renderer/canvas2d";
 import { MockSource, type SimSource } from "./sim/source";
 import { legendEntries, activeParked } from "./legend";
 import { theme } from "./theme";
-import { parsePreset } from "./preset";
+import { FIRST_RUN_PRESET, hasPreset, isGuided, parsePreset } from "./preset";
 import { WasmSource } from "./sim/wasmSource";
 import "./ui/app.css";
 import "./ui/console/console.css";
@@ -26,6 +26,8 @@ import { consoleTimeline, dipVsTwin, shiftClock } from "./ui/console/consoleMode
 import { focusRect } from "./ui/console/floorFocus";
 import type { ObjectId } from "./ui/console/types";
 import { TickPacer } from "./sim/pacer";
+import { GuideStrip } from "./ui/console/GuideStrip";
+import { deepestMinute, speedAt } from "./ui/console/guidedRun";
 
 applyThemeVars();
 
@@ -60,14 +62,31 @@ async function openSource(): Promise<{ source: SimSource; services: Services }> 
   }
 }
 
+function loadPreset(name: string, guided = false): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("preset", name);
+  if (guided) url.searchParams.set("guided", "1");
+  else url.searchParams.delete("guided");
+  window.location.href = url.toString();
+}
+
+/** First run: nothing loaded yet. One button loads the incident and plays the guided sequence. */
+function showEmptyState(): void {
+  presetSel.value = "";
+  presetSel.addEventListener("change", () => loadPreset(presetSel.value));
+  document.getElementById("empty")!.hidden = false;
+  document.getElementById("rail")!.append(h("p", { class: "quiet" }, "Incidents, causes and fixes appear here once a run is loaded."));
+  document.getElementById("side")!.append(h("p", { class: "quiet" }, "Select an incident to see what caused it, what it cost and what would have fixed it."));
+  document.getElementById("timeline")!.append(h("p", { class: "quiet" }, "The timeline shows throughput against a fault-free baseline once a run is loaded."));
+  document.getElementById("load-incident")!.addEventListener("click", () => loadPreset(FIRST_RUN_PRESET, true));
+  for (const b of [playBtn, ...speedBtns]) b.disabled = true;
+}
+
 async function main(): Promise<void> {
+  if (!hasPreset(window.location.search)) return showEmptyState();
   const { source, services } = await openSource();
   presetSel.value = preset;
-  presetSel.addEventListener("change", () => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("preset", presetSel.value);
-    window.location.href = url.toString();
-  });
+  presetSel.addEventListener("change", () => loadPreset(presetSel.value));
   for (const e of legendEntries()) {
     const item = document.createElement("span");
     item.className = "item";
@@ -104,6 +123,10 @@ async function main(): Promise<void> {
   const faultPanel = new FaultPanel(panels.faults, services.faults, () => nowTick);
 
   // Console state: the post-mortem data and the one shared selection.
+  const guideEl = document.getElementById("guide") as HTMLDivElement;
+  guideEl.hidden = false;
+  const guide = new GuideStrip(guideEl);
+  let guidedRun = isGuided(window.location.search);
   let data: ConsoleData | null = null;
   let selected: ObjectId | null = "inc";
   const incidentHost = h("div");
@@ -177,6 +200,7 @@ async function main(): Promise<void> {
   };
 
   function select(id: ObjectId | null): void {
+    if (id !== null && id !== "inc" && selected !== id) guide.setStep(2);
     selected = id;
     rail.select(id);
     inspector.show(id, data);
@@ -200,6 +224,17 @@ async function main(): Promise<void> {
   };
   const refreshSide = () => {
     refreshTimeline();
+    if (guidedRun && data?.incident) {
+      const series = services.metrics.series();
+      if (deepestMinute(series, data.incident.startMin) !== null) {
+        // The deepest point has passed: stop here and show the incident card.
+        guidedRun = false;
+        playing = false;
+        pacer.reset();
+        showPlaying();
+        select("inc");
+      }
+    }
     const dip = dipVsTwin(services.metrics.series());
     dipEl.textContent = dip === null ? "" : `${dip < 0 ? "−" : "+"}${Math.abs(dip)} %`;
     void faultPanel.refresh();
@@ -222,6 +257,7 @@ async function main(): Promise<void> {
       return;
     }
     tabs.select("trace");
+    guide.setStep(1);
     renderer.highlight([id]);
     if (!carrying.includes(snap.robotState[id]!)) {
       tracePanel.message(`R${id} is not carrying a parcel. Click a robot that is.`);
@@ -233,7 +269,9 @@ async function main(): Promise<void> {
   });
 
   let playing = true;
-  let speed = 1;
+  let speed = guidedRun ? 64 : 1;
+  const showSpeed = () => speedBtns.forEach((o) => o.classList.toggle("on", Number(o.dataset.speed) === speed));
+  showSpeed();
   // Wall-clock pacing: 1x is real time (1 tick = 0.5 s), not "N ticks per frame".
   const pacer = new TickPacer();
   let pending = 0;
@@ -249,7 +287,8 @@ async function main(): Promise<void> {
   for (const b of speedBtns) {
     b.addEventListener("click", () => {
       speed = Number(b.dataset.speed);
-      speedBtns.forEach((o) => o.classList.toggle("on", o === b));
+      guidedRun = false; // the viewer took the controls
+      showSpeed();
     });
   }
 
@@ -267,6 +306,13 @@ async function main(): Promise<void> {
 
   let busy = false;
   async function frame(): Promise<void> {
+    if (guidedRun && data?.incident) {
+      const next = speedAt(nowTick, data.incident.startMin, theme.ticksPerMinute);
+      if (next !== speed) {
+        speed = next;
+        showSpeed();
+      }
+    }
     if (playing) pending += pacer.take(performance.now(), speed);
     if (playing && !busy && pending > 0) {
       busy = true;
