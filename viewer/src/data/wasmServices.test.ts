@@ -4,7 +4,7 @@ import fixture from "./fixtures/wasm-shapes.json";
 import { createWasmServices, type RpcClient } from "./wasmServices";
 import { WorkerClient, type WorkerLike } from "../sim/client";
 import type { RpcMethod, WorkerRequest, WorkerResponse } from "../sim/protocol";
-import type { FaultKindInfo, MetricsSeries } from "./types";
+import type { FaultKindInfo, HeadlineCause, HeadlineFix, MetricsSeries, PostmortemHeadline } from "./types";
 
 const PHASES = ["queued", "awaiting_robot", "loading", "travelling", "blocked", "chute_wait", "drop"];
 const num = (v: unknown) => typeof v === "number";
@@ -42,6 +42,21 @@ describe("shared fixture matches types.ts", () => {
     expect([a.id, a.atTick, a.durationTicks, a.endTick].every(num)).toBe(true);
     expect(Object.values(a.params).every(num)).toBe(true);
   });
+
+  it("headline", () => {
+    const h: PostmortemHeadline = fixture.headline;
+    expect([h.startMin, h.endMin, h.maxDipPct, h.lossParcelMin, h.lateParcels, h.replays, h.histories].every(num)).toBe(true);
+    expect(typeof h.settled).toBe("boolean");
+    expect(h.tieWith === null || typeof h.tieWith === "string").toBe(true);
+    if (!h.cause || !h.fix) throw new Error("the fixture headline has a cause and a fix");
+    const c: HeadlineCause = h.cause;
+    expect([typeof c.label, typeof c.fault]).toEqual(["string", "string"]);
+    expect(num(c.sharePct) && num(c.bandPct)).toBe(true);
+    const f: HeadlineFix = h.fix;
+    expect(typeof f.label).toBe("string");
+    expect(num(f.recoveredParcelMin) && num(f.recoveryPct)).toBe(true);
+    expect(typeof f.withinNoise).toBe("boolean");
+  });
 });
 
 function fakeRpc(replies: Partial<Record<RpcMethod, string>>, calls: Array<[RpcMethod, unknown]> = []): RpcClient {
@@ -66,6 +81,7 @@ describe("createWasmServices", () => {
           inject_fault: JSON.stringify(fixture.activeFault),
           active_faults_json: JSON.stringify([fixture.activeFault]),
           postmortem_markdown: "# Post-mortem (placeholder)",
+          postmortem_headline: JSON.stringify(fixture.headline),
         },
         calls,
       ),
@@ -77,10 +93,17 @@ describe("createWasmServices", () => {
     expect((await s.faults.inject(req)).endTick).toBe(420);
     expect(await s.faults.active(130)).toHaveLength(1);
     expect(await s.postmortem.report()).toMatch(/placeholder/);
+    expect(await s.postmortem.headline()).toEqual(fixture.headline);
     expect(s.metrics.series().delivered).toEqual([110, 118, 95]);
     expect(calls).toContainEqual(["parcel_of_robot", 7]);
     expect(calls).toContainEqual(["inject_fault", JSON.stringify(req)]);
     expect(calls).toContainEqual(["active_faults_json", 130]);
+    expect(calls).toContainEqual(["postmortem_headline", undefined]);
+  });
+
+  it("maps a missing headline to null", async () => {
+    const s = createWasmServices(fakeRpc({ postmortem_headline: "null" }));
+    expect(await s.postmortem.headline()).toBeNull();
   });
 
   it("maps a missing parcel and a bad id to null", async () => {

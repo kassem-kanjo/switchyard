@@ -33,6 +33,7 @@ export const theme = {
     accent: "#5aa9e6",
     danger: "#e0524f",
     warn: "#f0a04b",
+    ok: "#4fae8b",
     badgeBg: "#7a4b12",
     badgeText: "#ffd9a0",
     sidebarWidth: 380,

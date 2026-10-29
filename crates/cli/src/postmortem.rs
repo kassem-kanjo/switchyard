@@ -70,11 +70,19 @@ fn run(args: &PostmortemArgs) -> Result<(), String> {
         None => println!("{md}"),
     }
     let histories = pm.histories();
+    let changes = pm.replays.len();
+    let replays = changes * histories;
     eprintln!(
-        "{} replays ({} changes x {histories} histories) in {wall:.1} s on {} threads",
-        pm.replays.len() * histories,
-        pm.replays.len(),
+        "{replays} {} ({changes} {} x {histories} {}) in {wall:.1} s on {} threads",
+        plural(replays, "replay", "replays"),
+        plural(changes, "change", "changes"),
+        plural(histories, "history", "histories"),
         rayon::current_num_threads()
     );
     Ok(())
+}
+
+/// `one` or `many` by count.
+const fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 { one } else { many }
 }

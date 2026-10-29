@@ -22,6 +22,7 @@
 
 pub mod candidates;
 pub mod detect;
+pub mod headline;
 pub mod report;
 pub mod shapley;
 
