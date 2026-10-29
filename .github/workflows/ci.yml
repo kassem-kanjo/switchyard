@@ -104,6 +104,78 @@ jobs:
         working-directory: viewer
         run: npm run build
 
+  # The same server the release binaries ship with, exercised end to end:
+  # build the viewer, embed it in the CLI and fetch both the page and its WASM.
+  view-smoke:
+    name: view smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+      # The CLI version must match wasm-bindgen in Cargo.lock.
+      - name: Cache wasm-bindgen-cli
+        id: wbg-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-cli-0.2.129-${{ runner.os }}
+      - name: Install wasm-bindgen-cli
+        if: steps.wbg-cache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Install dependencies
+        working-directory: viewer
+        run: npm ci
+      - name: Build viewer
+        working-directory: viewer
+        run: npm run build
+      - name: Build CLI with the embedded viewer
+        run: cargo build --release --locked -p switchyard-cli --features embed-viewer
+      - name: Smoke test (view)
+        shell: bash
+        run: |
+          set -eu
+          bin="target/release/switchyard"
+          if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
+          log="${RUNNER_TEMP:-/tmp}/view.log"
+          "$bin" view --no-open --port 8765 > "$log" 2>&1 &
+          pid=$!
+          fail() {
+            echo "view smoke test failed: $1" >&2
+            cat "$log" >&2 || true
+            kill "$pid" 2>/dev/null || true
+            exit 1
+          }
+          # HEAD requests keep curl away from /dev/null output files, which
+          # the Windows curl cannot open.
+          check() {
+            h=$(curl -sI "http://127.0.0.1:8765$1" | tr -d '\r' | tr 'A-Z' 'a-z') || h=""
+            printf '%s\n' "$h" | grep -q '^http/1.1 200' || fail "GET $1 was not 200: $h"
+            printf '%s\n' "$h" | grep -q "^content-type: $2" || fail "GET $1 has the wrong content type: $h"
+          }
+          ready=0
+          for _ in $(seq 1 40); do
+            if curl -fs "http://127.0.0.1:8765/" > /dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          [ "$ready" = 1 ] || fail "server did not answer on 127.0.0.1:8765 within 20s"
+          check / text/html
+          wasm=$(find viewer/dist -name '*.wasm' | head -1)
+          [ -n "$wasm" ] || fail "no .wasm file found under viewer/dist"
+          check "/${wasm#viewer/dist/}" application/wasm
+          kill "$pid"
+          echo "view smoke test passed"
+
   # ADR 0002: same scenario + seed must give a bit-identical state hash on
   # every platform. Reference values live in scripts/determinism/expected.txt.
   determinism-native:
