@@ -53,7 +53,7 @@ function parseCard(paras: string[]): HeadlineCard | null {
     sentences: eachLine(sentence),
     stats: stats as { value: string; caption: string }[],
     // The card adds its own "How we know" link, so drop the prefix rather than say it twice.
-    provenance: capitalise(strip(provenance).replace(/^How we know:\s*/i, "")),
+    provenance: capitalise(strip(provenance).replace(/^How we know:\s*/i, "").replace(/\.$/, "")),
   };
 }
 

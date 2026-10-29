@@ -53,7 +53,7 @@ describe("splitReport", () => {
       { value: "110", caption: "parcels late" },
       { value: "83 %", caption: "recoverable" },
     ]);
-    expect(r.card?.provenance).toBe("Proven by 96 replays of this shift · error bars from 8 versions of the day.");
+    expect(r.card?.provenance).toBe("Proven by 96 replays of this shift · error bars from 8 versions of the day");
   });
   it("opens Summary, folds the details and drops their repeated headings", () => {
     expect(r.sections.map((s) => [s.title, s.open])).toEqual([
