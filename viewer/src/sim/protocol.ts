@@ -20,6 +20,7 @@ export type RpcMethod =
   | "inject_fault"
   | "active_faults_json"
   | "postmortem_markdown"
+  | "postmortem_headline"
   /** On demand only: hashing walks the whole history, so snapshots do not carry it. */
   | "state_hash_hex";
 
@@ -63,4 +64,5 @@ export interface WasmSimApi {
   inject_fault(request: string): string;
   active_faults_json(tick: number): string;
   postmortem_markdown(): string;
+  postmortem_headline(): string;
 }

@@ -3,6 +3,7 @@
 //! `viewer/src/data/fixtures/wasm-shapes.json` keeps the two in step.
 
 use serde::Serialize;
+use switchyard_analysis::postmortem::headline::Headline;
 use switchyard_core::Tick;
 use switchyard_core::events::WaitCause;
 use switchyard_core::faults::{FaultKind, FaultSpec};
@@ -122,5 +123,78 @@ pub fn trace_out(trace: &ParcelTrace, faults: &[FaultSpec]) -> TraceOut {
         parcel_id: trace.parcel.0,
         robot: trace.robots.last().map(|r| r.0),
         spans: trace.spans.iter().map(|s| span_out(s, faults)).collect(),
+    }
+}
+
+/// The main cause in the headline (`HeadlineCause`).
+#[derive(Serialize)]
+pub struct CauseOut {
+    pub label: String,
+    pub fault: String,
+    #[serde(rename = "sharePct")]
+    pub share_pct: f64,
+    #[serde(rename = "bandPct")]
+    pub band_pct: f64,
+}
+
+/// The best fix in the headline (`HeadlineFix`).
+#[derive(Serialize)]
+pub struct FixOut {
+    pub label: String,
+    #[serde(rename = "recoveredParcelMin")]
+    pub recovered_parcel_min: i64,
+    #[serde(rename = "recoveryPct")]
+    pub recovery_pct: f64,
+    #[serde(rename = "withinNoise")]
+    pub within_noise: bool,
+}
+
+/// The one-glance post-mortem summary (`PostmortemHeadline`).
+#[derive(Serialize)]
+pub struct HeadlineOut {
+    #[serde(rename = "startMin")]
+    pub start_min: usize,
+    #[serde(rename = "endMin")]
+    pub end_min: usize,
+    pub settled: bool,
+    #[serde(rename = "maxDipPct")]
+    pub max_dip_pct: f64,
+    pub cause: Option<CauseOut>,
+    #[serde(rename = "tieWith")]
+    pub tie_with: Option<String>,
+    #[serde(rename = "lossParcelMin")]
+    pub loss_parcel_min: i64,
+    #[serde(rename = "lateParcels")]
+    pub late_parcels: u32,
+    pub fix: Option<FixOut>,
+    pub replays: usize,
+    pub histories: usize,
+}
+
+impl From<&Headline> for HeadlineOut {
+    fn from(h: &Headline) -> Self {
+        Self {
+            start_min: h.start_min,
+            end_min: h.end_min,
+            settled: h.settled,
+            max_dip_pct: h.max_dip_pct,
+            cause: h.cause.as_ref().map(|c| CauseOut {
+                label: c.label.clone(),
+                fault: c.fault.clone(),
+                share_pct: c.share_pct,
+                band_pct: c.band_pct,
+            }),
+            tie_with: h.tie_with.clone(),
+            loss_parcel_min: h.loss_parcel_min,
+            late_parcels: h.late_parcels,
+            fix: h.fix.as_ref().map(|f| FixOut {
+                label: f.label.clone(),
+                recovered_parcel_min: f.recovered_parcel_min,
+                recovery_pct: f.recovery_pct,
+                within_noise: f.within_noise,
+            }),
+            replays: h.replays,
+            histories: h.histories,
+        }
     }
 }
