@@ -3,6 +3,7 @@ import { collapsible } from "./Collapsible";
 import { h } from "./dom";
 import { renderMarkdown } from "./markdown";
 import { splitReport, type HeadlineCard } from "./reportSections";
+import { inspectorSections } from "./console/sectionPlan";
 
 /** The headline card: the sentence and three numbers, the proof one click away. */
 function cardNode(card: HeadlineCard, openMethod: () => void): HTMLElement {
@@ -30,7 +31,8 @@ function cardNode(card: HeadlineCard, openMethod: () => void): HTMLElement {
 
 /** Lay a report out: the headline card, then collapsible sections (Summary open). Falls back to plain Markdown. */
 export function renderReport(md: string, into: HTMLElement): void {
-  const { card, sections } = splitReport(md);
+  const { card, sections: all } = splitReport(md);
+  const sections = card ? inspectorSections(all) : all;
   if (!card || sections.length === 0) {
     renderMarkdown(md, into);
     return;
