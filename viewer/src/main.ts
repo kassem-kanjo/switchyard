@@ -27,7 +27,7 @@ import { focusRect } from "./ui/console/floorFocus";
 import type { ObjectId } from "./ui/console/types";
 import { TickPacer } from "./sim/pacer";
 import { GuideStrip } from "./ui/console/GuideStrip";
-import { deepestMinute, jumpTarget, speedAt } from "./ui/console/guidedRun";
+import { jumpTarget, reachedDip, speedAt } from "./ui/console/guidedRun";
 
 applyThemeVars();
 
@@ -224,17 +224,6 @@ async function main(): Promise<void> {
   };
   const refreshSide = () => {
     refreshTimeline();
-    if (guidedRun && data?.incident) {
-      const series = services.metrics.series();
-      if (deepestMinute(series, data.incident.startMin) !== null) {
-        // The deepest point has passed: stop here and show the incident card.
-        guidedRun = false;
-        playing = false;
-        pacer.reset();
-        showPlaying();
-        select("inc");
-      }
-    }
     const dip = dipVsTwin(services.metrics.series());
     dipEl.textContent = dip === null ? "" : `${dip < 0 ? "−" : "+"}${Math.abs(dip)} %`;
     void faultPanel.refresh();
@@ -307,6 +296,18 @@ async function main(): Promise<void> {
   let busy = false;
   let jumped = false;
   async function frame(): Promise<void> {
+    if (guidedRun && data?.incident) {
+      const { dipPct, endMin } = data.incident;
+      if ((dipPct !== null && reachedDip(services.metrics.series(), dipPct)) || nowTick >= endMin * theme.ticksPerMinute) {
+        // The report's worst minute is in: stop here, refresh the chip, and show the incident card.
+        guidedRun = false;
+        playing = false;
+        pacer.reset();
+        showPlaying();
+        refreshSide();
+        select("inc");
+      }
+    }
     if (guidedRun && !jumped && data?.incident) {
       // Fast-forward in the worker without rendering, to just before the incident.
       jumped = true;

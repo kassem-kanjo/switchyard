@@ -1,7 +1,7 @@
 /** Pure logic for the first-run guided sequence: how fast to play, and when the incident is at its deepest. */
 import type { MetricsSeries } from "../../data/types";
 
-export type GuideSpeed = 1 | 4 | 16;
+export type GuideSpeed = 1 | 4 | 64;
 
 /** Ticks of lead-in the run is fast-forwarded to before the incident starts. */
 export const LEAD_IN_TICKS = 30;
@@ -13,37 +13,23 @@ export function jumpTarget(incidentStartMin: number, ticksPerMinute: number): nu
 
 /**
  * Speed by sim tick, after the jump. 4x into the incident, 1x for its first 10 ticks (5 s) so the jam and
- * the failures are seen happening, then 16x down to the deepest point (real time would take minutes).
+ * the failures are seen happening, then 64x down to the deepest point (real time would take minutes).
  */
 export function speedAt(tick: number, incidentStartMin: number, ticksPerMinute: number): GuideSpeed {
   const rel = tick - incidentStartMin * ticksPerMinute;
   if (rel < 0) return 4;
   if (rel < 10) return 1;
-  return 16;
+  return 64;
 }
 
 /**
- * The shift minute with the largest loss against the fault-free twin, once the series shows the loss
- * easing again (so it is known to be the deepest), else null. Only finished minutes count; the last entry
- * is still in progress.
+ * True once the latest finished minute is at least as far below the fault-free twin as the report's
+ * worst minute (`dipPct`, whole %), so the top-bar chip and the incident card quote the same figure.
  */
-export function deepestMinute(series: MetricsSeries, incidentStartMin: number): number | null {
-  const twin = series.twin;
-  if (!twin) return null;
-  let best: { minute: number; delta: number } | null = null;
-  let eased = false;
-  for (let i = 0; i < series.delivered.length - 1; i++) {
-    const minute = series.startMinute + i;
-    const a = series.delivered[i];
-    const t = twin[i];
-    if (minute < incidentStartMin || a === undefined || t === undefined) continue;
-    const delta = a - t;
-    if (best === null || delta < best.delta) {
-      best = { minute, delta };
-      eased = false;
-    } else if (delta > best.delta) {
-      eased = true;
-    }
-  }
-  return best !== null && best.delta < 0 && eased ? best.minute : null;
+export function reachedDip(series: MetricsSeries, dipPct: number): boolean {
+  const i = series.delivered.length - 2; // the last entry is the minute still in progress
+  const twin = series.twin?.[i];
+  const actual = series.delivered[i];
+  if (i < 0 || twin === undefined || actual === undefined || twin <= 0) return false;
+  return Math.round((1 - actual / twin) * 100) >= dipPct;
 }
