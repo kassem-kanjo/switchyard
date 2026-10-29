@@ -28,6 +28,8 @@ export interface Fix {
   /** "X1".. in the report's table order (best first). */
   id: string;
   label: string;
+  /** Plain short phrase for the rail; the full label stays in the fix card. */
+  short: string;
   recoveredMin: number;
   bandMin: number;
   recoveryPct: number;
@@ -85,6 +87,19 @@ function faultTimes(sections: ReportSection[]): Map<string, { start?: number; en
   return out;
 }
 
+/** The short plain phrase for a fix, from the report's wording; falls back to the full label. */
+export function shortFix(label: string): string {
+  let m = /send chute (w+)'s destination to (w+)/i.exec(label);
+  if (m) return `Reroute ${m[1]} to ${m[2]}`;
+  m = /clear failed robots.*?within (d+) min/i.exec(label);
+  if (m) return `Clear dead robots in ${m[1]} min`;
+  m = /allow (d+) robots inbound per station/i.exec(label);
+  if (m) return `Allow ${m[1]} robots per station`;
+  m = /release (d+) spare robots/i.exec(label);
+  if (m) return `Add ${m[1]} spare robots`;
+  return capitalise(label);
+}
+
 export function parseReport(md: string): ConsoleData {
   const { card, sections } = splitReport(md);
   const eye = card?.eyebrow ?? "";
@@ -117,6 +132,7 @@ export function parseReport(md: string): ConsoleData {
     return {
       id: `X${i + 1}`,
       label: r["fix"] ?? "",
+      short: shortFix(r["fix"] ?? ""),
       recoveredMin: gain.v,
       bandMin: gain.band,
       recoveryPct: num(r["share of loss"]),
@@ -169,7 +185,7 @@ export function railItems(d: ConsoleData): RailItem[] {
     items.push({
       id: f.id,
       kind: "fix",
-      title: capitalise(f.label),
+      title: f.short,
       subtitle: f.withinNoise ? "no measurable effect" : `would save ${f.recoveryPct} %`,
       sharePct: f.withinNoise ? 0 : f.recoveryPct,
       tone: f.withinNoise ? "muted" : "ok",

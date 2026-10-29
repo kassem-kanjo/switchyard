@@ -27,11 +27,11 @@ describe("object cards", () => {
     expect(text).toContain("5,076");
   });
   it("says 'no measurable effect' for a fix inside the noise", () => {
-    const fix = { id: "X4", label: "release 10 spare robots", recoveredMin: 118, bandMin: 446, recoveryPct: 2, withinNoise: true, cost: "10 robots" };
+    const fix = { id: "X4", label: "release 10 spare robots", short: "Add 10 spare robots", recoveredMin: 118, bandMin: 446, recoveryPct: 2, withinNoise: true, cost: "10 robots" };
     expect((fixCard(fix) as unknown as { textContent: string }).textContent).toContain("No measurable effect: 118 ± 446");
   });
   it("shows the saving and cost for a real fix", () => {
-    const fix = { id: "X1", label: "reroute", recoveredMin: 5162, bandMin: 372, recoveryPct: 83, withinNoise: false, cost: "sort-plan change" };
+    const fix = { id: "X1", label: "reroute", short: "Reroute", recoveredMin: 5162, bandMin: 372, recoveryPct: 83, withinNoise: false, cost: "sort-plan change" };
     const text = (fixCard(fix) as unknown as { textContent: string }).textContent;
     expect(text).toContain("Saves 83 %");
     expect(text).toContain("Cost: sort-plan change");

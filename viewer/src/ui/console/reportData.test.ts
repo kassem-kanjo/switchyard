@@ -28,6 +28,9 @@ describe("parseReport on the shipped two-dead-robots report", () => {
     expect(d.fixes[0]).toMatchObject({ recoveredMin: 5162, bandMin: 372, recoveryPct: 83, withinNoise: false });
     expect(d.fixes[3]).toMatchObject({ recoveredMin: 118, withinNoise: true });
   });
+  it("gives fixes plain short phrases", () => {
+    expect(d.fixes.map((f) => f.short)).toEqual(["Reroute C289 to C269", "Clear dead robots in 1 min", "Allow 8 robots per station", "Add 10 spare robots"]);
+  });
   it("builds rail rows in incident, cause, fix order", () => {
     const items = railItems(d);
     expect(items.map((i) => i.kind)).toEqual(["incident", "cause", "cause", "cause", "fix", "fix", "fix", "fix"]);
