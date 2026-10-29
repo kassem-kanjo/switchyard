@@ -14,7 +14,8 @@ export function focusAlpha(focus: ReadonlySet<number> | null, i: number): number
 const carrying = (s: number): boolean => s === RobotState.ToChute || s === RobotState.Dropping;
 
 /**
- * Faint dashed line from each carrying robot to its destination chute.
+ * Faint dashed line from a carrying robot to its destination chute, only for
+ * the robots in `show` (the hovered robot and the focused ones), so the floor stays readable.
  * `centre(i)` gives the robot's (interpolated) centre in canvas pixels.
  */
 export function drawDestinationLines(
@@ -23,18 +24,18 @@ export function drawDestinationLines(
   fit: FitTransform,
   th: Theme,
   centre: (i: number) => { x: number; y: number },
-  focus: ReadonlySet<number> | null,
+  show: ReadonlySet<number>,
 ): void {
   ctx.save();
   ctx.setLineDash([4, 4]);
   ctx.lineWidth = 1;
   ctx.strokeStyle = th.robotState[RobotState.ToChute] ?? "#fff";
   for (let i = 0; i < snap.robotState.length; i++) {
-    if (snap.robotState[i] !== RobotState.ToChute) continue;
+    if (!show.has(i) || snap.robotState[i] !== RobotState.ToChute) continue;
     const g = goalOf(snap, i);
     if (!g) continue;
     const c = centre(i);
-    ctx.globalAlpha = 0.28 * focusAlpha(focus, i);
+    ctx.globalAlpha = 0.5;
     ctx.beginPath();
     ctx.moveTo(c.x, c.y);
     ctx.lineTo(fit.offsetX + (g.x + 0.5) * fit.scale, fit.offsetY + (g.y + 0.5) * fit.scale);

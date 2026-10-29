@@ -154,7 +154,9 @@ export class Canvas2DRenderer implements Renderer {
       ctx.lineCap = "butt";
     }
 
-    drawDestinationLines(ctx, snap, fit, th, centre, this.focus);
+    const lineFor = new Set<number>(this.focus ?? []);
+    if (this.hover !== null) lineFor.add(this.hover);
+    drawDestinationLines(ctx, snap, fit, th, centre, lineFor);
 
     const size = fit.scale * th.robotScale;
     const inset = (fit.scale - size) / 2;
