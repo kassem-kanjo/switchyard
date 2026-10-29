@@ -2,6 +2,9 @@ import { theme, type Theme } from "../theme";
 import { hatchSegments, ringPhase, ringRadius } from "./marks";
 import { CellKind, RobotState, type FloorMarks, type LayoutView, type Renderer, type SnapshotView } from "./Renderer";
 import { fitToCanvas, type FitTransform } from "./fit";
+import { MotionTracker } from "./motion";
+import { describeRobot } from "./labels";
+import { drawDestinationLines, drawHoverCard, drawParcelDots, focusAlpha } from "./overlay";
 
 export class Canvas2DRenderer implements Renderer {
   private canvas!: HTMLCanvasElement;
@@ -16,6 +19,9 @@ export class Canvas2DRenderer implements Renderer {
   private last: SnapshotView | null = null;
   private marks: FloorMarks | null = null;
   private reducedMotion = false;
+  private readonly motion = new MotionTracker();
+  private focus: ReadonlySet<number> | null = null;
+  private hover: number | null = null;
 
   constructor(private readonly th: Theme = theme) {}
 
@@ -46,6 +52,34 @@ export class Canvas2DRenderer implements Renderer {
     this.highlighted = new Set(robotIds);
   }
 
+  /** Dim every robot not in `ids` to 25 %; an empty list clears focus. */
+  setFocus(ids: number[]): void {
+    this.focus = ids.length === 0 ? null : new Set(ids);
+  }
+
+  pickAt(px: number, py: number): number | null {
+    const snap = this.last;
+    if (!snap || this.fit.scale <= 0) return null;
+    const now = performance.now();
+    const half = (this.fit.scale * this.th.robotScale) / 2 + 2;
+    let best: number | null = null;
+    let bestD = Infinity;
+    for (let i = 0; i < snap.robotState.length; i++) {
+      const p = this.motion.position(i, now, this.reducedMotion);
+      const dx = Math.abs(this.fit.offsetX + (p.x + 0.5) * this.fit.scale - px);
+      const dy = Math.abs(this.fit.offsetY + (p.y + 0.5) * this.fit.scale - py);
+      if (dx <= half && dy <= half && dx + dy < bestD) {
+        best = i;
+        bestD = dx + dy;
+      }
+    }
+    return best;
+  }
+
+  setHover(id: number | null): void {
+    this.hover = id;
+  }
+
   setMarks(marks: FloorMarks): void {
     this.marks = marks;
   }
@@ -56,7 +90,13 @@ export class Canvas2DRenderer implements Renderer {
 
   draw(snap: SnapshotView): void {
     this.last = snap;
+    const now = performance.now();
+    this.motion.update(snap.tick, snap.robotXY, now);
     const { ctx, th, fit, dpr, layout } = this;
+    const centre = (i: number) => {
+      const p = this.motion.position(i, now, this.reducedMotion);
+      return { x: fit.offsetX + (p.x + 0.5) * fit.scale, y: fit.offsetY + (p.y + 0.5) * fit.scale };
+    };
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = th.background;
     ctx.fillRect(0, 0, this.cssW, this.cssH);
@@ -84,12 +124,46 @@ export class Canvas2DRenderer implements Renderer {
       ctx.globalAlpha = 1;
     }
 
+    // Faint trails behind moving robots, fading towards the oldest cell.
+    if (!this.reducedMotion) {
+      ctx.lineCap = "round";
+      ctx.lineWidth = Math.max(1, fit.scale * 0.18);
+      for (let i = 0; i < snap.robotState.length; i++) {
+        if (snap.robotState[i] === RobotState.Idle) continue;
+        const trail = this.motion.trail(i);
+        if (trail.length === 0) continue;
+        const pos = this.motion.position(i, now);
+        const points: Array<{ x: number; y: number }> = trail.map((c) => ({
+          x: fit.offsetX + (c.x + 0.5) * fit.scale,
+          y: fit.offsetY + (c.y + 0.5) * fit.scale,
+        }));
+        points.push({ x: fit.offsetX + (pos.x + 0.5) * fit.scale, y: fit.offsetY + (pos.y + 0.5) * fit.scale });
+        ctx.strokeStyle = th.robotState[snap.robotState[i]!] ?? th.robotState[0];
+        const segments = points.length - 1;
+        for (let s = 0; s < segments; s++) {
+          const a = points[s]!;
+          const b = points[s + 1]!;
+          ctx.globalAlpha = 0.22 * ((s + 1) / segments) * focusAlpha(this.focus, i);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+      ctx.lineCap = "butt";
+    }
+
+    drawDestinationLines(ctx, snap, fit, th, centre, this.focus);
+
     const size = fit.scale * th.robotScale;
     const inset = (fit.scale - size) / 2;
     const n = snap.robotState.length;
     for (let i = 0; i < n; i++) {
-      const x = fit.offsetX + snap.robotXY[2 * i]! * fit.scale + inset;
-      const y = fit.offsetY + snap.robotXY[2 * i + 1]! * fit.scale + inset;
+      const pos = this.motion.position(i, now, this.reducedMotion);
+      const x = fit.offsetX + pos.x * fit.scale + inset;
+      const y = fit.offsetY + pos.y * fit.scale + inset;
+      ctx.globalAlpha = focusAlpha(this.focus, i);
       ctx.fillStyle = th.robotState[snap.robotState[i]!] ?? th.robotState[0];
       ctx.fillRect(x, y, size, size);
       if (snap.robotState[i] === 0) {
@@ -104,12 +178,16 @@ export class Canvas2DRenderer implements Renderer {
       }
     }
 
-    const { r, alpha } = ringRadius(fit.scale, ringPhase(performance.now()), this.reducedMotion);
+    ctx.globalAlpha = 1;
+    drawParcelDots(ctx, snap, fit, th, centre, this.focus);
+
+    const { r, alpha } = ringRadius(fit.scale, ringPhase(now), this.reducedMotion);
     for (let i = 0; i < n; i++) {
       if (snap.robotState[i] !== RobotState.Failed) continue;
-      const cx = fit.offsetX + snap.robotXY[2 * i]! * fit.scale + fit.scale / 2;
-      const cy = fit.offsetY + snap.robotXY[2 * i + 1]! * fit.scale + fit.scale / 2;
-      ctx.globalAlpha = alpha;
+      const pos = this.motion.position(i, now, this.reducedMotion);
+      const cx = fit.offsetX + pos.x * fit.scale + fit.scale / 2;
+      const cy = fit.offsetY + pos.y * fit.scale + fit.scale / 2;
+      ctx.globalAlpha = alpha * focusAlpha(this.focus, i);
       ctx.strokeStyle = th.ui.danger;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -117,6 +195,10 @@ export class Canvas2DRenderer implements Renderer {
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
+
+    if (this.hover !== null && this.hover < n) {
+      drawHoverCard(ctx, describeRobot(snap, layout, this.hover), centre(this.hover), { w: this.cssW, h: this.cssH }, th);
+    }
   }
 
   /** Static floor, cached on an offscreen canvas at device resolution. */

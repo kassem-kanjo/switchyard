@@ -19,6 +19,7 @@ import { fitToCanvas } from "./renderer/fit";
 import { RobotState } from "./renderer/Renderer";
 import { chuteCells, floorMarks, incidentCells, incidentFrame, jammedCellsOf, type Frame } from "./renderer/floorMarks";
 import { h } from "./ui/dom";
+import { TickPacer } from "./sim/pacer";
 
 applyThemeVars();
 
@@ -146,19 +147,36 @@ async function main(): Promise<void> {
   });
 
   let playing = true;
+  // Wall-clock pacing: 1x is real time (1 tick = 0.5 s), not "N ticks per frame".
+  const pacer = new TickPacer();
+  let pending = 0;
   playBtn.addEventListener("click", () => {
     playing = !playing;
+    pacer.reset();
     playBtn.textContent = playing ? "Pause" : "Play";
   });
+
+  // Hover label: the renderer draws it next to the robot under the pointer.
+  const hoverAt = (e: PointerEvent) => {
+    const r = canvas.getBoundingClientRect();
+    const px = ((e.clientX - r.left) * canvas.clientWidth) / r.width;
+    const py = ((e.clientY - r.top) * canvas.clientHeight) / r.height;
+    renderer.setHover?.(renderer.pickAt?.(px, py) ?? null);
+  };
+  canvas.addEventListener("pointermove", hoverAt);
+  canvas.addEventListener("pointerleave", () => renderer.setHover?.(null));
 
   new ResizeObserver(() => renderer.resize(canvas.clientWidth, canvas.clientHeight)).observe(canvas);
 
   let busy = false;
   async function frame(): Promise<void> {
-    if (playing && !busy) {
+    if (playing) pending += pacer.take(performance.now(), Number(speedSel.value));
+    if (playing && !busy && pending > 0) {
       busy = true;
+      const n = pending;
+      pending = 0;
       try {
-        await source.step(Number(speedSel.value));
+        await source.step(n);
       } catch (err) {
         console.error("sim step failed, pausing:", err);
         playing = false;

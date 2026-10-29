@@ -52,7 +52,7 @@ use switchyard_core::grid::Cell;
 use switchyard_core::ids::FaultId;
 use switchyard_core::presets;
 use switchyard_core::sim::{Sim, Snapshot};
-use switchyard_core::world::{Phase, RobotState};
+use switchyard_core::world::{Goal, Phase, RobotState};
 use switchyard_trace::{ParcelTrace, TraceBuilder};
 use wasm_bindgen::prelude::{JsError, wasm_bindgen};
 
@@ -420,6 +420,38 @@ impl WasmSim {
             .collect()
     }
 
+    /// Where each robot is heading, interleaved `[x0, y0, x1, y1, ...]` in
+    /// cells: the chute cell or the station's induction cell. `u16::MAX`
+    /// for both coordinates when the robot has no goal or is only parking.
+    #[must_use]
+    pub fn robot_goal_xy(&self) -> Vec<u16> {
+        let world = self.sim.world();
+        let layout = self.sim.layout();
+        let mut out = Vec::with_capacity(2 * world.robots.goal.len());
+        for goal in &world.robots.goal {
+            let cell = match goal {
+                Some(Goal::Chute(c)) => layout.chutes.get(c.0 as usize).copied(),
+                Some(Goal::Station(s)) => layout.stations.get(s.0 as usize).copied(),
+                Some(Goal::Park) | None => None,
+            };
+            match cell {
+                Some(c) => {
+                    let p = layout.grid.pos(c);
+                    out.push(p.x);
+                    out.push(p.y);
+                }
+                None => out.extend([u16::MAX, u16::MAX]),
+            }
+        }
+        out
+    }
+
+    /// Consecutive ticks each robot has been waiting (blocked or held up).
+    #[must_use]
+    pub fn robot_waited(&self) -> Vec<u32> {
+        self.sim.world().robots.waited.clone()
+    }
+
     /// Aggregate counters as a JSON object (hand-formatted; all integers).
     #[must_use]
     pub fn stats_json(&self) -> String {
@@ -622,6 +654,24 @@ mod tests {
         assert_eq!(w.robot_xy().len(), 2 * w.robot_state().len());
         assert_eq!(w.state_hash_hex().len(), 16);
         assert!(w.stats_json().starts_with("{\"tick\":50,"));
+    }
+
+    #[test]
+    fn robot_goal_and_wait_columns_line_up_with_robots() {
+        let mut w = ws(build(preset_toml("small").unwrap()).unwrap());
+        w.step(400);
+        let n = w.robot_state().len();
+        assert_eq!(w.robot_goal_xy().len(), 2 * n);
+        assert_eq!(w.robot_waited().len(), n);
+        // A robot heading to a chute or station has a goal inside the grid.
+        let (gw, gh) = (w.width(), w.height());
+        let goals = w.robot_goal_xy();
+        let with_goal = goals
+            .chunks(2)
+            .filter(|g| g[0] != u16::MAX)
+            .inspect(|g| assert!(g[0] < gw && g[1] < gh))
+            .count();
+        assert!(with_goal > 0, "some robot should be heading somewhere");
     }
 
     #[test]

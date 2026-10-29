@@ -13,12 +13,11 @@ export function legendEntries(th: Theme = theme): LegendEntry[] {
   const l = th.robotStateLabel;
   return [
     { label: l[3], colour: s[3], kind: "robot" },
-    { label: "Empty, to induction", colour: s[1], kind: "robot" },
-    { label: "Loading / dropping", colour: s[2], kind: "robot" },
-    { label: l[0], colour: s[0], kind: "outlined-robot" },
+    { label: l[1], colour: s[1], kind: "robot" },
     { label: l[5], colour: s[5], kind: "robot" },
+    { label: l[0], colour: s[0], kind: "outlined-robot" },
     { label: "Chute", colour: th.chute, kind: "cell" },
-    { label: "Induction", colour: th.induction, kind: "cell" },
+    { label: "Pick-up station", colour: th.induction, kind: "cell" },
   ];
 }
 

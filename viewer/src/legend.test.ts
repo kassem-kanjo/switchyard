@@ -9,7 +9,14 @@ describe("legend", () => {
     expect(e.map((x) => x.colour)).toEqual(
       expect.arrayContaining([theme.chute, theme.induction, theme.robotState[0], theme.robotState[5]]),
     );
-    expect(e).toHaveLength(7);
+    expect(e.map((x) => x.label)).toEqual([
+      "Carrying a parcel",
+      "Heading to pick up",
+      "Broken down",
+      "Parked",
+      "Chute",
+      "Pick-up station",
+    ]);
   });
   it("robot fills have >= 3:1 contrast against the floor", () => {
     for (const c of theme.robotState) expect(contrastRatio(c, theme.floor)).toBeGreaterThanOrEqual(3);
