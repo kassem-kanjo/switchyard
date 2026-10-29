@@ -7,12 +7,14 @@
   <title>Switchyard</title>
 </head>
 <body>
-  <div id="app">
-    <header id="bar">
-      <h1>Switchyard</h1>
+  <div id="app" class="app">
+    <header id="bar" class="top">
+      <span class="brand">SWITCHYARD</span>
       <span id="badge" hidden title="The WASM simulation failed to load">mock data</span>
-      <label>Preset
-        <select id="preset">
+      <span class="sep"></span>
+      <span class="lbl">Site</span><span id="site" class="sel">-</span>
+      <label class="lbl">Scenario
+        <select id="preset" class="sel">
           <option value="small">small</option>
           <option value="medium">medium</option>
           <option value="large">large</option>
@@ -21,39 +23,32 @@
           <option value="two-dead-robots-and-a-jam">two-dead-robots-and-a-jam</option>
         </select>
       </label>
-      <span id="fleet" title="active / parked robots">active 0 / parked 0</span>
-      <span id="stats">delivered 0 · 0.0 / h</span>
-      <button id="play" type="button">Pause</button>
-      <label>Speed
-        <select id="speed">
-          <option value="1">1×</option>
-          <option value="4" selected>4×</option>
-          <option value="16">16×</option>
-          <option value="64">64×</option>
-        </select>
-      </label>
-      <span id="tick">tick 0</span>
+      <span class="sep"></span>
+      <div class="ctl" id="speeds" role="group" aria-label="Simulation speed">
+        <button id="play" type="button" aria-label="Pause">❚❚</button>
+        <button type="button" data-speed="1">1×</button>
+        <button type="button" data-speed="4" class="on">4×</button>
+        <button type="button" data-speed="16">16×</button>
+        <button type="button" data-speed="64">64×</button>
+      </div>
+      <span id="incident-chip" class="chip d" hidden></span>
+      <span class="lbl push">Throughput</span><span id="stats" class="mono">-</span><span id="dip" class="mono dip"></span>
+      <span class="lbl">Shift time</span><span id="tick" class="mono">00:00:00</span>
     </header>
-    <main id="main">
-      <section id="floor" aria-label="Sortation floor">
-        <div id="stage"><canvas id="canvas"></canvas></div>
-        <div id="legend" aria-label="Legend"></div>
-      </section>
-      <aside id="side" aria-label="Analysis">
-        <div class="chart-card">
-          <header>
-            <h2>Delivered per minute</h2>
-            <div class="key">
-              <span><i></i>actual</span>
-              <span><i class="twin"></i>fault-free twin</span>
-              <span><i class="fault"></i>fault</span>
-            </div>
-          </header>
-          <canvas id="chart" aria-label="Throughput chart"></canvas>
-        </div>
-        <div id="tabbar"></div>
-      </aside>
-    </main>
+
+    <nav id="rail" class="rail" aria-label="Objects"></nav>
+
+    <section id="floor" class="canvas" aria-label="Sortation floor">
+      <div id="stage"><canvas id="canvas"></canvas><div id="focus" aria-hidden="true"></div></div>
+      <div class="hud"><span id="focus-chip" class="chip d" hidden></span><span id="fleet" class="chip" title="active / parked robots">active 0 / parked 0</span></div>
+      <div id="legend" aria-label="Legend"></div>
+    </section>
+
+    <aside id="side" class="insp" aria-label="Inspector">
+      <div id="tabbar"></div>
+    </aside>
+
+    <section id="timeline" class="tl" aria-label="Timeline"></section>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

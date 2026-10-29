@@ -5,11 +5,11 @@ import { theme } from "./theme";
 import { parsePreset } from "./preset";
 import { WasmSource } from "./sim/wasmSource";
 import "./ui/app.css";
+import "./ui/console/console.css";
 import { applyThemeVars } from "./theme";
 import { createMockServices } from "./data/mock";
 import { createWasmServices } from "./data/wasmServices";
 import type { Services } from "./data/types";
-import { ChartView } from "./ui/ChartView";
 import { TracePanel } from "./ui/TracePanel";
 import { FaultPanel } from "./ui/FaultPanel";
 import { PostmortemPanel } from "./ui/PostmortemPanel";
@@ -19,12 +19,24 @@ import { fitToCanvas } from "./renderer/fit";
 import { RobotState } from "./renderer/Renderer";
 import { chuteCells, floorMarks, incidentCells, incidentFrame, jammedCellsOf, type Frame } from "./renderer/floorMarks";
 import { h } from "./ui/dom";
+import { Rail } from "./ui/console/Rail";
+import { Timeline } from "./ui/console/Timeline";
+import { Inspector } from "./ui/console/Inspector";
+import { clockOf, parseReport, railItems, type ConsoleData } from "./ui/console/reportData";
+import { consoleTimeline, dipVsTwin, shiftClock } from "./ui/console/consoleModel";
+import { focusRect } from "./ui/console/floorFocus";
+import type { ObjectId } from "./ui/console/types";
 
 applyThemeVars();
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const playBtn = document.getElementById("play") as HTMLButtonElement;
-const speedSel = document.getElementById("speed") as HTMLSelectElement;
+const speedBtns = [...document.querySelectorAll<HTMLButtonElement>("#speeds [data-speed]")];
+const siteEl = document.getElementById("site") as HTMLSpanElement;
+const dipEl = document.getElementById("dip") as HTMLSpanElement;
+const chipEl = document.getElementById("incident-chip") as HTMLSpanElement;
+const focusChip = document.getElementById("focus-chip") as HTMLSpanElement;
+const focusEl = document.getElementById("focus") as HTMLDivElement;
 const tickEl = document.getElementById("tick") as HTMLSpanElement;
 const statsEl = document.getElementById("stats") as HTMLSpanElement;
 const fleetEl = document.getElementById("fleet") as HTMLSpanElement;
@@ -75,35 +87,104 @@ async function main(): Promise<void> {
   const layout = source.layout();
   renderer.init(canvas, layout);
 
-  // Sidebar. Data providers come from the same worker as the floor.
-  const chart = new ChartView(document.getElementById("chart") as HTMLCanvasElement);
-  const panels = { trace: h("div"), faults: h("div"), postmortem: h("div") };
-  document.getElementById("side")!.append(panels.trace, panels.faults, panels.postmortem);
+  // Inspector. Data providers come from the same worker as the floor.
+  siteEl.textContent = `${layout.width}×${layout.height} floor · ${source.snapshot().robotState.length} robots`;
+  const panels = { selection: h("div"), trace: h("div"), faults: h("div") };
+  document.getElementById("side")!.append(panels.selection, panels.trace, panels.faults);
   const tabs = mountTabs(
     document.getElementById("tabbar")!,
     [
+      { id: "selection", label: "Selection" },
       { id: "trace", label: "Trace" },
       { id: "faults", label: "Faults" },
-      { id: "postmortem", label: "Post-mortem" },
     ],
     panels,
   );
   const tracePanel = new TracePanel(panels.trace, services.traces);
   const faultPanel = new FaultPanel(panels.faults, services.faults, () => nowTick);
-  new PostmortemPanel(panels.postmortem, services.postmortem, preset);
-  // Floor marks: jammed chutes from the active faults, and the
-  // frame the floor eases to when the Post-mortem tab is open (kept after the incident ends).
+
+  // Console state: the post-mortem data and the one shared selection.
+  let data: ConsoleData | null = null;
+  let selected: ObjectId | null = "inc";
+  const incidentHost = h("div");
+  const inspector = new Inspector(panels.selection, incidentHost);
+  const rail = new Rail(document.getElementById("rail")!, (id: ObjectId) => select(id));
+  const timeline = new Timeline(document.getElementById("timeline")!, {
+    onSelect: (id: string) => select(id),
+    // The sim only runs forward, so scrubbing reads any minute of the run so far rather than seeking.
+    onScrub: (min: number) => {
+      const s = services.metrics.series();
+      const i = Math.floor(min) - s.startMinute;
+      const a = s.delivered[i];
+      const tw = s.twin?.[i];
+      timeline.setReadout(Number.isNaN(min) || a === undefined ? "" : `${clockOf(Math.floor(min))} · ${a}/min${tw !== undefined ? ` vs ${tw} normal` : ""}`);
+    },
+  });
+  new PostmortemPanel(incidentHost, services.postmortem, preset, (md) => {
+    data = parseReport(md);
+    rail.setItems(railItems(data));
+    rail.select(selected);
+    if (data.incident) {
+      chipEl.hidden = false;
+      chipEl.textContent = `INCIDENT · ${clockOf(data.incident.startMin)}–${clockOf(data.incident.endMin)}`;
+    }
+    select(selected ?? "inc");
+  });
+
   const chutes = chuteCells(layout);
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let floorFrame: Frame | null = null;
-  const postmortemTab = document.getElementById("tab-postmortem")!;
-  const applyFrame = () => {
-    const on = postmortemTab.getAttribute("aria-selected") === "true" && floorFrame !== null;
-    canvas.style.transformOrigin = "0 0";
-    canvas.style.transition = reduceMotion ? "none" : "transform 400ms ease";
-    canvas.style.transform = on ? `translate(${floorFrame!.tx}px, ${floorFrame!.ty}px) scale(${floorFrame!.k})` : "none";
+  const selectionTab = document.getElementById("tab-selection")!;
+  const selectedTitle = (): string => {
+    const hit = railItems(data ?? { card: null, sections: [], incident: null, causes: [], fixes: [] }).find((i) => i.id === selected);
+    return hit ? hit.title : "";
   };
-  new MutationObserver(applyFrame).observe(postmortemTab, { attributes: true, attributeFilter: ["aria-selected"] });
+  // The floor zooms to the incident while the selection is shown, and the focus ring rides the same transform.
+  const applyFrame = () => {
+    const on = selectionTab.getAttribute("aria-selected") === "true" && floorFrame !== null && data?.incident != null;
+    for (const el of [canvas, focusEl]) {
+      el.style.transformOrigin = "0 0";
+      el.style.transition = reduceMotion ? "none" : "transform 400ms ease";
+      el.style.transform = on ? `translate(${floorFrame!.tx}px, ${floorFrame!.ty}px) scale(${floorFrame!.k})` : "none";
+    }
+  };
+  new MutationObserver(applyFrame).observe(selectionTab, { attributes: true, attributeFilter: ["aria-selected"] });
+
+  /** Ring the selected cause on the floor while its fault is active (the engine only reports active faults). */
+  const refreshFocus = async (): Promise<void> => {
+    const ring = document.createElement("div");
+    ring.className = "ring";
+    const snap = source.snapshot();
+    const fit = fitToCanvas(layout.width, layout.height, canvas.clientWidth, canvas.clientHeight, theme.padding);
+    const cause = data?.causes.find((c) => c.id === selected);
+    const fault = cause ? (await services.faults.active(snap.tick)).find((f) => `F${f.id}` === cause.id) : undefined;
+    let cell: [number, number] | null = null;
+    if (fault?.kind === "chute_jam") {
+      const c = chutes[fault.params.chute ?? -1];
+      if (c !== undefined) cell = [c % layout.width, Math.floor(c / layout.width)];
+    } else if (fault?.kind === "robot_failure" && fault.params.robot !== undefined) {
+      const r = fault.params.robot;
+      cell = [snap.robotXY[2 * r]!, snap.robotXY[2 * r + 1]!];
+    }
+    if (!cell) return void focusEl.replaceChildren();
+    const rc = focusRect(fit, cell[0], cell[1]);
+    Object.assign(ring.style, { left: `${rc.left}px`, top: `${rc.top}px`, width: `${rc.size}px`, height: `${rc.size}px` });
+    focusEl.replaceChildren(ring);
+  };
+
+  function select(id: ObjectId | null): void {
+    selected = id;
+    rail.select(id);
+    inspector.show(id, data);
+    tabs.select("selection");
+    focusChip.hidden = !id || !data;
+    focusChip.textContent = id === "inc" ? "Focus: incident area" : `Focus: ${selectedTitle()}`;
+    renderer.highlight([]);
+    void refreshFocus().catch(() => focusEl.replaceChildren());
+    refreshTimeline();
+  }
+
+  const refreshTimeline = () => timeline.update(consoleTimeline(services.metrics.series(), data, selected, nowTick));
   const refreshMarks = async () => {
     const snap = source.snapshot();
     const jammed = jammedCellsOf(await services.faults.active(snap.tick), chutes);
@@ -111,9 +192,12 @@ async function main(): Promise<void> {
     renderer.setMarks?.(marks);
     floorFrame = incidentFrame(incidentCells(layout, snap, jammed), layout, canvas.clientWidth, canvas.clientHeight, theme.padding) ?? floorFrame;
     applyFrame();
+    await refreshFocus();
   };
   const refreshSide = () => {
-    chart.update(services.metrics.series());
+    refreshTimeline();
+    const dip = dipVsTwin(services.metrics.series());
+    dipEl.textContent = dip === null ? "" : `${dip < 0 ? "−" : "+"}${Math.abs(dip)} %`;
     void faultPanel.refresh();
     void refreshMarks().catch((err) => console.warn("floor marks unavailable:", err));
   };
@@ -146,10 +230,21 @@ async function main(): Promise<void> {
   });
 
   let playing = true;
+  let speed = 4;
+  const showPlaying = () => {
+    playBtn.textContent = playing ? "❚❚" : "▶";
+    playBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
+  };
   playBtn.addEventListener("click", () => {
     playing = !playing;
-    playBtn.textContent = playing ? "Pause" : "Play";
+    showPlaying();
   });
+  for (const b of speedBtns) {
+    b.addEventListener("click", () => {
+      speed = Number(b.dataset.speed);
+      speedBtns.forEach((o) => o.classList.toggle("on", o === b));
+    });
+  }
 
   new ResizeObserver(() => renderer.resize(canvas.clientWidth, canvas.clientHeight)).observe(canvas);
 
@@ -158,11 +253,11 @@ async function main(): Promise<void> {
     if (playing && !busy) {
       busy = true;
       try {
-        await source.step(Number(speedSel.value));
+        await source.step(speed);
       } catch (err) {
         console.error("sim step failed, pausing:", err);
         playing = false;
-        playBtn.textContent = "Play";
+        showPlaying();
       } finally {
         busy = false;
       }
@@ -171,11 +266,12 @@ async function main(): Promise<void> {
     nowTick = snap.tick;
     faultPanel.tickBars();
     renderer.draw(snap);
-    tickEl.textContent = `tick ${snap.tick}`;
+    tickEl.textContent = shiftClock(snap.tick, theme.ticksPerMinute);
+    tickEl.dataset.tick = String(snap.tick);
     const fl = activeParked(snap.robotState);
     fleetEl.textContent = `active ${fl.active} / parked ${fl.parked}`;
     const st = source.stats();
-    statsEl.textContent = `delivered ${st.delivered} · ${(st.throughput_per_hour_milli / 1000).toFixed(1)} / h`;
+    statsEl.textContent = `${Math.round(st.throughput_per_hour_milli / 1000).toLocaleString("en-US")}/h`;
     requestAnimationFrame(() => void frame());
   }
   requestAnimationFrame(() => void frame());
