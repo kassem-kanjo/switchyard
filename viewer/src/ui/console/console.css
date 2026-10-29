@@ -98,3 +98,9 @@ button.link { color: #8ABBFF; }
   .kpis, .hc-stats { gap: 16px; }
   .kpi .v, .hc-num { font-size: 22px; }
 }
+
+/* Inspector order: the card and sections first, the analyse control and its note last (as in the mockup). */
+#panel-selection > div:nth-child(2) { display: flex; flex-direction: column; }
+#panel-selection .report { order: 1; }
+#panel-selection .pm-top { order: 2; padding-top: 4px; }
+#panel-selection > div:nth-child(2) > .note { order: 3; margin: 0 16px 16px; }
