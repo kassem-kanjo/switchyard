@@ -1,41 +1,6 @@
 /* Design tokens: colours, type scale and spacing come from theme.ts via applyThemeVars(). */
 html, body { margin: 0; height: 100%; font-family: var(--font); font-size: 13px; font-variant-numeric: tabular-nums; background: var(--bg); color: var(--text); }
-#app { display: flex; flex-direction: column; height: 100%; }
-#bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
-#bar h1 { margin: 0; font-size: 16px; font-weight: 600; margin-right: auto; }
 button, select, input { font: inherit; color: inherit; }
-#bar button, #bar select { padding: 4px 8px; background: var(--panel-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
-#stats { font-variant-numeric: tabular-nums; font-family: var(--font-mono); opacity: 0.85; }
-#badge { background: var(--badge-bg); color: var(--badge-text); padding: 4px 8px; border-radius: 2px; font-size: 12px; }
-#badge[hidden] { display: none; }
-#tick { font-variant-numeric: tabular-nums; font-family: var(--font-mono); min-width: 9ch; text-align: right; }
-
-#main { flex: 1; min-height: 0; display: flex; flex-direction: row; }
-#floor { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-#stage { flex: 1; min-height: 0; position: relative; overflow: hidden; }
-#canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
-#legend { flex: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 8px 16px; background: var(--panel); border-top: 1px solid var(--border); font-size: var(--fs-label); text-transform: uppercase; letter-spacing: 0.4px; }
-#legend span.item { display: inline-flex; align-items: center; gap: 4px; }
-#legend i { width: 10px; height: 10px; display: inline-block; box-sizing: border-box; }
-#legend i.outlined { border: 1.5px solid; }
-
-/* Sidebar: right of the floor on wide screens, under it on narrow ones. */
-#side { flex: none; width: var(--sidebar-width); display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--border); }
-@media (max-width: 820px) { /* keep in step with theme.narrowBreakpoint */
-  #main { flex-direction: column; overflow-y: auto; }
-  #floor { flex: none; height: 55vh; }
-  #side { width: auto; border-left: 0; border-top: 1px solid var(--border); flex: none; }
-}
-
-.chart-card { padding: 12px 16px 8px; border-bottom: 1px solid var(--border); }
-.chart-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.chart-card h2 { margin: 0; font-size: 13px; font-weight: 600; }
-.key { display: flex; gap: 8px; font-size: var(--fs-label); text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); }
-.key span { display: inline-flex; align-items: center; gap: 4px; }
-.key i { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--accent); }
-.key i.twin { border-top: 2px dashed var(--text-muted); }
-.key i.fault { height: 9px; width: 9px; border: 0; background: var(--danger); opacity: 0.4; }
-#chart { display: block; width: 100%; height: 150px; touch-action: none; }
 
 [role="tablist"] { display: flex; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--border); }
 [role="tab"] { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; margin-bottom: -1px; color: var(--text-muted); cursor: pointer; font-size: var(--fs-label); text-transform: uppercase; letter-spacing: 0.4px; }

@@ -3,6 +3,7 @@ import { collapsible } from "./Collapsible";
 import { h } from "./dom";
 import { renderMarkdown } from "./markdown";
 import { splitReport, type HeadlineCard } from "./reportSections";
+import { inspectorSections } from "./console/sectionPlan";
 
 /** The headline card: the sentence and three numbers, the proof one click away. */
 function cardNode(card: HeadlineCard, openMethod: () => void): HTMLElement {
@@ -30,7 +31,8 @@ function cardNode(card: HeadlineCard, openMethod: () => void): HTMLElement {
 
 /** Lay a report out: the headline card, then collapsible sections (Summary open). Falls back to plain Markdown. */
 export function renderReport(md: string, into: HTMLElement): void {
-  const { card, sections } = splitReport(md);
+  const { card, sections: all } = splitReport(md);
+  const sections = card ? inspectorSections(all) : all;
   if (!card || sections.length === 0) {
     renderMarkdown(md, into);
     return;
@@ -71,6 +73,8 @@ export class PostmortemPanel {
     root: HTMLElement,
     private readonly provider: PostmortemProvider,
     private readonly preset: string,
+    /** Called with each report shown, so the console can read its structured tables. */
+    private readonly onReport: (md: string) => void = () => {},
   ) {
     this.button.addEventListener("click", () => void this.run());
     root.append(
@@ -98,6 +102,7 @@ export class PostmortemPanel {
     if (this.out.childElementCount > 0) return;
     this.source.textContent = `Precomputed for the "${this.preset}" preset (native engine, full replay budget).`;
     renderReport(md, this.out);
+    this.onReport(md);
   }
 
   private async run(): Promise<void> {
@@ -105,7 +110,9 @@ export class PostmortemPanel {
     this.source.textContent = "Live analysis of the current run (in the browser, thin noise bands).";
     this.out.replaceChildren(h("p", { class: "note" }, "Replaying candidate causes... this can take several seconds on a long run, and the floor pauses until it finishes."));
     try {
-      renderReport(await this.provider.report(), this.out);
+      const md = await this.provider.report();
+      renderReport(md, this.out);
+      this.onReport(md);
     } catch (err) {
       this.out.replaceChildren(h("p", { class: "note error" }, `Post-mortem failed: ${String(err)}`));
     } finally {
