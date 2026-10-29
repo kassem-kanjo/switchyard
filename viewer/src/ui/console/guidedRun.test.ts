@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { deepestMinute, speedAt } from "./guidedRun";
+import { deepestMinute, jumpTarget, speedAt } from "./guidedRun";
 import type { MetricsSeries } from "../../data/types";
 
 const T = 120;
 const series = (delivered: number[], twin: number[], startMinute = 28): MetricsSeries => ({ ticksPerMinute: T, startMinute, delivered, twin, faults: [] });
 
-describe("speedAt", () => {
-  it("fast-forwards, then 4x, then 1x at the start of the incident, then 4x", () => {
-    expect(speedAt(0, 30, T)).toBe(64);
-    expect(speedAt(27 * T, 30, T)).toBe(4);
-    expect(speedAt(30 * T + 10, 30, T)).toBe(1);
-    expect(speedAt(31 * T, 30, T)).toBe(4);
+describe("speedAt and jumpTarget", () => {
+  it("jumps to just before the incident, then 4x, 1x at the jam, 16x", () => {
+    expect(jumpTarget(30, T)).toBe(30 * T - 30);
+    expect(speedAt(30 * T - 30, 30, T)).toBe(4);
+    expect(speedAt(30 * T + 5, 30, T)).toBe(1);
+    expect(speedAt(30 * T + 10, 30, T)).toBe(16);
   });
 });
 

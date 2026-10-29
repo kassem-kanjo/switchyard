@@ -27,7 +27,7 @@ import { focusRect } from "./ui/console/floorFocus";
 import type { ObjectId } from "./ui/console/types";
 import { TickPacer } from "./sim/pacer";
 import { GuideStrip } from "./ui/console/GuideStrip";
-import { deepestMinute, speedAt } from "./ui/console/guidedRun";
+import { deepestMinute, jumpTarget, speedAt } from "./ui/console/guidedRun";
 
 applyThemeVars();
 
@@ -269,7 +269,7 @@ async function main(): Promise<void> {
   });
 
   let playing = true;
-  let speed = guidedRun ? 64 : 1;
+  let speed = guidedRun ? 4 : 1;
   const showSpeed = () => speedBtns.forEach((o) => o.classList.toggle("on", Number(o.dataset.speed) === speed));
   showSpeed();
   // Wall-clock pacing: 1x is real time (1 tick = 0.5 s), not "N ticks per frame".
@@ -305,7 +305,22 @@ async function main(): Promise<void> {
   new ResizeObserver(() => renderer.resize(canvas.clientWidth, canvas.clientHeight)).observe(canvas);
 
   let busy = false;
+  let jumped = false;
   async function frame(): Promise<void> {
+    if (guidedRun && !jumped && data?.incident) {
+      // Fast-forward in the worker without rendering, to just before the incident.
+      jumped = true;
+      busy = true;
+      try {
+        const n = jumpTarget(data.incident.startMin, theme.ticksPerMinute) - source.snapshot().tick;
+        if (n > 0) await source.step(n);
+        pacer.reset();
+      } catch (err) {
+        console.warn("fast-forward failed:", err);
+      } finally {
+        busy = false;
+      }
+    }
     if (guidedRun && data?.incident) {
       const next = speedAt(nowTick, data.incident.startMin, theme.ticksPerMinute);
       if (next !== speed) {
