@@ -33,8 +33,3 @@ export function hatchSegments(x: number, y: number, size: number, step: number):
   return out;
 }
 
-/** Glow alpha for a 0..1 intensity, clamped before scaling. */
-export function glowAlpha(intensity: number, max = 0.35): number {
-  const clamped = Math.min(1, Math.max(0, intensity));
-  return clamped * max;
-}

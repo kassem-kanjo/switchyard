@@ -19,8 +19,6 @@ export interface SnapshotView {
 export interface FloorMarks {
   /** Cell indices (row-major) of jammed chutes. */
   jammedCells: number[];
-  /** Per-cell glow intensity 0..1, row-major width*height, or null. */
-  glow: Float32Array | null;
 }
 
 export interface Renderer {

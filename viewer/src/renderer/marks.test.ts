@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { glowAlpha, hatchSegments, ringPhase, ringRadius } from "./marks";
+import { hatchSegments, ringPhase, ringRadius } from "./marks";
 
 describe("ringPhase", () => {
   it("is 0 at t=0", () => {
@@ -69,19 +69,5 @@ describe("hatchSegments", () => {
   it("returns nothing for degenerate sizes", () => {
     expect(hatchSegments(0, 0, 0, 4)).toEqual([]);
     expect(hatchSegments(0, 0, 10, 0)).toEqual([]);
-  });
-});
-
-describe("glowAlpha", () => {
-  it("scales intensity and clamps to 0..1", () => {
-    expect(glowAlpha(-1)).toBe(0);
-    expect(glowAlpha(0)).toBe(0);
-    expect(glowAlpha(0.5)).toBeCloseTo(0.175, 10);
-    expect(glowAlpha(2)).toBeCloseTo(0.35, 10);
-  });
-
-  it("honours a custom maximum", () => {
-    expect(glowAlpha(0.5, 0.4)).toBeCloseTo(0.2, 10);
-    expect(glowAlpha(5, 0.4)).toBeCloseTo(0.4, 10);
   });
 });

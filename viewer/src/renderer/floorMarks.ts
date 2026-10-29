@@ -23,31 +23,18 @@ export function jammedCellsOf(
   return out;
 }
 
-/**
- * A soft glow over the area the incident touches: full strength on each failed robot and jammed chute,
- * fading to nothing `radius` cells away. Row-major, 0..1.
- */
-export function buildGlow(layout: LayoutView, snap: SnapshotView, jammed: readonly number[], radius = 4): Float32Array {
-  const { width: w, height: h } = layout;
-  const glow = new Float32Array(w * h);
-  const stamp = (cx: number, cy: number) => {
-    for (let y = Math.max(0, cy - radius); y <= Math.min(h - 1, cy + radius); y++) {
-      for (let x = Math.max(0, cx - radius); x <= Math.min(w - 1, cx + radius); x++) {
-        const v = 1 - Math.hypot(x - cx, y - cy) / (radius + 1);
-        if (v > glow[y * w + x]!) glow[y * w + x] = v;
-      }
-    }
-  };
+/** Cells of the incident: every failed robot and every jammed chute, as [x, y] pairs. */
+export function incidentCells(layout: LayoutView, snap: SnapshotView, jammed: readonly number[]): [number, number][] {
+  const out: [number, number][] = [];
   for (let i = 0; i < snap.robotState.length; i++) {
-    if (snap.robotState[i] === RobotState.Failed) stamp(snap.robotXY[2 * i]!, snap.robotXY[2 * i + 1]!);
+    if (snap.robotState[i] === RobotState.Failed) out.push([snap.robotXY[2 * i]!, snap.robotXY[2 * i + 1]!]);
   }
-  for (const c of jammed) stamp(c % w, Math.floor(c / w));
-  return glow;
+  for (const c of jammed) out.push([c % layout.width, Math.floor(c / layout.width)]);
+  return out;
 }
 
-export function floorMarks(layout: LayoutView, snap: SnapshotView, jammedCells: number[]): FloorMarks {
-  const glow = buildGlow(layout, snap, jammedCells);
-  return { jammedCells, glow: glow.some((v) => v > 0) ? glow : null };
+export function floorMarks(jammedCells: number[]): FloorMarks {
+  return { jammedCells };
 }
 
 export interface Frame {
@@ -58,24 +45,23 @@ export interface Frame {
   ty: number;
 }
 
-/** Zoom and pan that centre the glowing area in the canvas, never leaving the canvas edges; null if no glow. */
+/** Zoom and pan that centre the incident cells in the canvas, never leaving the canvas edges; null if there are none. */
 export function incidentFrame(
-  glow: Float32Array | null,
+  cells: readonly (readonly [number, number])[],
   layout: LayoutView,
   w: number,
   h: number,
   padding: number,
   maxZoom = 1.8,
+  marginCells = 3,
 ): Frame | null {
-  if (!glow) return null;
+  if (cells.length === 0) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
-  glow.forEach((v, i) => {
-    if (v < 0.2) return;
-    const x = i % layout.width;
-    const y = Math.floor(i / layout.width);
-    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + 1); y1 = Math.max(y1, y + 1);
-  });
-  if (x1 < 0) return null;
+  for (const [x, y] of cells) {
+    x0 = Math.min(x0, x - marginCells); y0 = Math.min(y0, y - marginCells);
+    x1 = Math.max(x1, x + 1 + marginCells); y1 = Math.max(y1, y + 1 + marginCells);
+  }
+  x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(layout.width, x1); y1 = Math.min(layout.height, y1);
   const fit = fitToCanvas(layout.width, layout.height, w, h, padding);
   const bw = (x1 - x0) * fit.scale;
   const bh = (y1 - y0) * fit.scale;

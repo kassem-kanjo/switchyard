@@ -1,5 +1,5 @@
 import { theme, type Theme } from "../theme";
-import { glowAlpha, hatchSegments, ringPhase, ringRadius } from "./marks";
+import { hatchSegments, ringPhase, ringRadius } from "./marks";
 import { CellKind, RobotState, type FloorMarks, type LayoutView, type Renderer, type SnapshotView } from "./Renderer";
 import { fitToCanvas, type FitTransform } from "./fit";
 
@@ -63,23 +63,6 @@ export class Canvas2DRenderer implements Renderer {
     if (this.grid) ctx.drawImage(this.grid, 0, 0, this.cssW, this.cssH);
 
     const marks = this.marks;
-    if (marks?.glow) {
-      const glow = marks.glow;
-      const cells = Math.min(glow.length, layout.width * layout.height);
-      ctx.fillStyle = th.ui.danger;
-      for (let i = 0; i < cells; i++) {
-        const intensity = glow[i]!;
-        if (intensity <= 0.02) continue;
-        ctx.globalAlpha = glowAlpha(intensity);
-        ctx.fillRect(
-          fit.offsetX + (i % layout.width) * fit.scale,
-          fit.offsetY + Math.floor(i / layout.width) * fit.scale,
-          fit.scale,
-          fit.scale,
-        );
-      }
-      ctx.globalAlpha = 1;
-    }
     if (marks) {
       for (const cell of marks.jammedCells) {
         if (!Number.isInteger(cell) || cell < 0 || cell >= layout.width * layout.height) continue;

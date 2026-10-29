@@ -17,7 +17,7 @@ import { mountTabs } from "./ui/tabs";
 import { pickRobot } from "./ui/pick";
 import { fitToCanvas } from "./renderer/fit";
 import { RobotState } from "./renderer/Renderer";
-import { chuteCells, floorMarks, incidentFrame, jammedCellsOf, type Frame } from "./renderer/floorMarks";
+import { chuteCells, floorMarks, incidentCells, incidentFrame, jammedCellsOf, type Frame } from "./renderer/floorMarks";
 import { h } from "./ui/dom";
 
 applyThemeVars();
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
   const tracePanel = new TracePanel(panels.trace, services.traces);
   const faultPanel = new FaultPanel(panels.faults, services.faults, () => nowTick);
   new PostmortemPanel(panels.postmortem, services.postmortem, preset);
-  // Floor marks: jammed chutes from the active faults, a glow around failed robots and jams, and the
+  // Floor marks: jammed chutes from the active faults, and the
   // frame the floor eases to when the Post-mortem tab is open (kept after the incident ends).
   const chutes = chuteCells(layout);
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -106,9 +106,10 @@ async function main(): Promise<void> {
   new MutationObserver(applyFrame).observe(postmortemTab, { attributes: true, attributeFilter: ["aria-selected"] });
   const refreshMarks = async () => {
     const snap = source.snapshot();
-    const marks = floorMarks(layout, snap, jammedCellsOf(await services.faults.active(snap.tick), chutes));
+    const jammed = jammedCellsOf(await services.faults.active(snap.tick), chutes);
+    const marks = floorMarks(jammed);
     renderer.setMarks?.(marks);
-    floorFrame = incidentFrame(marks.glow, layout, canvas.clientWidth, canvas.clientHeight, theme.padding) ?? floorFrame;
+    floorFrame = incidentFrame(incidentCells(layout, snap, jammed), layout, canvas.clientWidth, canvas.clientHeight, theme.padding) ?? floorFrame;
     applyFrame();
   };
   const refreshSide = () => {
