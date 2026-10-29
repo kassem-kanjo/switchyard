@@ -12,6 +12,14 @@ repository.workspace = true
 name = "switchyard"
 path = "src/main.rs"
 
+[features]
+# Release builds embed the production viewer (`viewer/dist`) in the binary so
+# `switchyard view` works from anywhere. The feature is off by default because
+# `include_dir!` fails the build when the folder is missing, which would break
+# a dev build without a built viewer; those builds compile fine and `view`
+# prints a clear message instead.
+embed-viewer = ["dep:include_dir"]
+
 [dependencies]
 switchyard-core.workspace = true
 switchyard-trace.workspace = true
@@ -19,6 +27,10 @@ clap.workspace = true
 switchyard-analysis.workspace = true
 # Seeds and twin runs run in parallel (parallelism only across sims, ADR 0002).
 rayon = "1"
+# Static HTTP server for `switchyard view`; always needed, embedded or not.
+tiny_http.workspace = true
+# Optional: only pulled in by the `embed-viewer` feature.
+include_dir = { workspace = true, optional = true }
 
 [lints]
 workspace = true
