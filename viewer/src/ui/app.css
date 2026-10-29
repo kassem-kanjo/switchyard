@@ -47,13 +47,8 @@ button, select, input { font: inherit; color: inherit; }
 
 .row { display: flex; gap: 8px; margin-bottom: 12px; }
 .row input { flex: 1; min-width: 0; }
-<<<<<<< HEAD
 input, select { background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 4px 8px; }
-button.primary, .row button, #panel-postmortem button { background: var(--accent); color: var(--wall); border: 0; border-radius: var(--radius-control); padding: 8px 12px; font-weight: 600; cursor: pointer; }
-=======
-input, select { background: var(--bg); border: 1px solid var(--border-strong); border-radius: 4px; padding: 5px 8px; }
-button.primary, .row button, #panel-postmortem > button { background: var(--accent); color: var(--wall); border: 0; border-radius: 4px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
->>>>>>> origin/main
+button.primary, .row button, #panel-postmortem > button { background: var(--accent); color: var(--wall); border: 0; border-radius: var(--radius-control); padding: 8px 12px; font-weight: 600; cursor: pointer; }
 button:disabled { opacity: 0.6; cursor: default; }
 .note { margin: 8px 0; color: var(--text-muted); font-size: 13px; line-height: 1.45; }
 .note.error, .err { color: var(--danger); }

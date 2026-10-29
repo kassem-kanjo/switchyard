@@ -24,7 +24,6 @@ export const theme = {
 
   /** Sidebar chrome. Applied as CSS custom properties by applyThemeVars(). */
   ui: {
-<<<<<<< HEAD
     panel: "#252A31",
     panelRaised: "#2F343C",
     border: "#383E47",
@@ -37,7 +36,7 @@ export const theme = {
     ok: "#238551",
     badgeBg: "#3a2410",
     badgeText: "#EC9A3C",
-    sidebarWidth: 420,
+    sidebarWidth: 380,
     font: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
     fontMono: 'ui-monospace, Consolas, "SF Mono", monospace',
     fsCaption: 12,
@@ -54,21 +53,6 @@ export const theme = {
     s6: 32,
     radiusCard: 2,
     radiusControl: 2,
-=======
-    panel: "#262d3d",
-    panelRaised: "#2e3649",
-    border: "#343d52",
-    borderStrong: "#44506b",
-    text: "#e6e9ef",
-    textMuted: "#9aa6bf",
-    accent: "#5aa9e6",
-    danger: "#e0524f",
-    warn: "#f0a04b",
-    ok: "#4fae8b",
-    badgeBg: "#7a4b12",
-    badgeText: "#ffd9a0",
-    sidebarWidth: 380,
->>>>>>> origin/main
   },
 
   /** Below this viewport width the sidebar drops under the floor (mirrored in app.css). */
