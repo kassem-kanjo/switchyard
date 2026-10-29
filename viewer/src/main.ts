@@ -141,7 +141,9 @@ async function main(): Promise<void> {
   };
   // The floor zooms to the incident while the selection is shown, and the focus ring rides the same transform.
   const applyFrame = () => {
-    const on = selectionTab.getAttribute("aria-selected") === "true" && floorFrame !== null && data?.incident != null;
+    // Overview by default (whole floor, incident marked); zoom in only when a cause is selected.
+    const causeSelected = data?.causes.some((c) => c.id === selected) ?? false;
+    const on = selectionTab.getAttribute("aria-selected") === "true" && floorFrame !== null && causeSelected;
     for (const el of [canvas, focusEl]) {
       el.style.transformOrigin = "0 0";
       el.style.transition = reduceMotion ? "none" : "transform 400ms ease";
@@ -181,6 +183,7 @@ async function main(): Promise<void> {
     tabs.select("selection");
     focusChip.hidden = !id || !data;
     focusChip.textContent = id === "inc" ? "Focus: incident area" : `Focus: ${selectedTitle()}`;
+    applyFrame();
     void refreshFocus().catch(() => focusEl.replaceChildren());
     refreshTimeline();
   }
