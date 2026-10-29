@@ -41,8 +41,61 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Add the wasm target
+        shell: bash
+        run: rustup target add wasm32-unknown-unknown
+      # Releases run rarely, so installing the CLI is cheaper than caching it.
+      # The version must match wasm-bindgen in Cargo.lock.
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Install viewer dependencies
+        working-directory: viewer
+        run: npm ci
+      - name: Build viewer
+        working-directory: viewer
+        run: npm run build
       - name: Build
-        run: cargo build --release --locked -p switchyard-cli --target ${{ matrix.target }}
+        run: cargo build --release --locked -p switchyard-cli --features embed-viewer --target ${{ matrix.target }}
+      - name: Smoke test (view)
+        shell: bash
+        run: |
+          set -eu
+          bin="target/${{ matrix.target }}/release/switchyard"
+          if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
+          log="${RUNNER_TEMP:-/tmp}/view.log"
+          "$bin" view --no-open --port 8765 > "$log" 2>&1 &
+          pid=$!
+          fail() {
+            echo "view smoke test failed: $1" >&2
+            cat "$log" >&2 || true
+            kill "$pid" 2>/dev/null || true
+            exit 1
+          }
+          # HEAD requests keep curl away from /dev/null output files, which
+          # the Windows curl cannot open.
+          check() {
+            h=$(curl -sI "http://127.0.0.1:8765$1" | tr -d '\r' | tr 'A-Z' 'a-z') || h=""
+            printf '%s\n' "$h" | grep -q '^http/1.1 200' || fail "GET $1 was not 200: $h"
+            printf '%s\n' "$h" | grep -q "^content-type: $2" || fail "GET $1 has the wrong content type: $h"
+          }
+          ready=0
+          for _ in $(seq 1 40); do
+            if curl -fs "http://127.0.0.1:8765/" > /dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          [ "$ready" = 1 ] || fail "server did not answer on 127.0.0.1:8765 within 20s"
+          check / text/html
+          wasm=$(find viewer/dist -name '*.wasm' | head -1)
+          [ -n "$wasm" ] || fail "no .wasm file found under viewer/dist"
+          check "/${wasm#viewer/dist/}" application/wasm
+          kill "$pid"
+          echo "view smoke test passed"
       - name: Package
         shell: bash
         run: |
