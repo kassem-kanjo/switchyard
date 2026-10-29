@@ -14,7 +14,6 @@ import { TracePanel } from "./ui/TracePanel";
 import { FaultPanel } from "./ui/FaultPanel";
 import { PostmortemPanel } from "./ui/PostmortemPanel";
 import { mountTabs } from "./ui/tabs";
-import { pickRobot } from "./ui/pick";
 import { fitToCanvas } from "./renderer/fit";
 import { RobotState } from "./renderer/Renderer";
 import { chuteCells, floorMarks, incidentCells, incidentFrame, jammedCellsOf, type Frame } from "./renderer/floorMarks";
@@ -26,6 +25,7 @@ import { clockOf, parseReport, railItems, type ConsoleData } from "./ui/console/
 import { consoleTimeline, dipVsTwin, shiftClock } from "./ui/console/consoleModel";
 import { focusRect } from "./ui/console/floorFocus";
 import type { ObjectId } from "./ui/console/types";
+import { TickPacer } from "./sim/pacer";
 
 applyThemeVars();
 
@@ -166,7 +166,9 @@ async function main(): Promise<void> {
       const r = fault.params.robot;
       cell = [snap.robotXY[2 * r]!, snap.robotXY[2 * r + 1]!];
     }
-    if (!cell) return void focusEl.replaceChildren();
+    // A broken-down robot is focused through the renderer (#45); a chute gets the ring.
+    renderer.setFocus?.(fault?.kind === "robot_failure" && fault.params.robot !== undefined ? [fault.params.robot] : []);
+    if (!cell || fault?.kind !== "chute_jam") return void focusEl.replaceChildren();
     const rc = focusRect(fit, cell[0], cell[1]);
     Object.assign(ring.style, { left: `${rc.left}px`, top: `${rc.top}px`, width: `${rc.size}px`, height: `${rc.size}px` });
     focusEl.replaceChildren(ring);
@@ -179,7 +181,6 @@ async function main(): Promise<void> {
     tabs.select("selection");
     focusChip.hidden = !id || !data;
     focusChip.textContent = id === "inc" ? "Focus: incident area" : `Focus: ${selectedTitle()}`;
-    renderer.highlight([]);
     void refreshFocus().catch(() => focusEl.replaceChildren());
     refreshTimeline();
   }
@@ -208,12 +209,11 @@ async function main(): Promise<void> {
   const carrying: readonly number[] = [RobotState.ToChute, RobotState.Dropping, RobotState.Failed];
   canvas.addEventListener("click", (e) => {
     const r = canvas.getBoundingClientRect();
-    const fit = fitToCanvas(layout.width, layout.height, canvas.clientWidth, canvas.clientHeight, theme.padding);
     const snap = source.snapshot();
     // The canvas may be zoomed by the incident frame: map the click back to canvas pixels.
     const px = ((e.clientX - r.left) * canvas.clientWidth) / r.width;
     const py = ((e.clientY - r.top) * canvas.clientHeight) / r.height;
-    const id = pickRobot(snap, fit, px, py, null);
+    const id = renderer.pickAt?.(px, py) ?? null;
     if (id === null) {
       renderer.highlight([]);
       return;
@@ -230,13 +230,17 @@ async function main(): Promise<void> {
   });
 
   let playing = true;
-  let speed = 4;
+  let speed = 1;
+  // Wall-clock pacing: 1x is real time (1 tick = 0.5 s), not "N ticks per frame".
+  const pacer = new TickPacer();
+  let pending = 0;
   const showPlaying = () => {
     playBtn.textContent = playing ? "❚❚" : "▶";
     playBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
   };
   playBtn.addEventListener("click", () => {
     playing = !playing;
+    pacer.reset();
     showPlaying();
   });
   for (const b of speedBtns) {
@@ -246,14 +250,27 @@ async function main(): Promise<void> {
     });
   }
 
+  // Hover label: the renderer draws it next to the robot under the pointer.
+  const hoverAt = (e: PointerEvent) => {
+    const r = canvas.getBoundingClientRect();
+    const px = ((e.clientX - r.left) * canvas.clientWidth) / r.width;
+    const py = ((e.clientY - r.top) * canvas.clientHeight) / r.height;
+    renderer.setHover?.(renderer.pickAt?.(px, py) ?? null);
+  };
+  canvas.addEventListener("pointermove", hoverAt);
+  canvas.addEventListener("pointerleave", () => renderer.setHover?.(null));
+
   new ResizeObserver(() => renderer.resize(canvas.clientWidth, canvas.clientHeight)).observe(canvas);
 
   let busy = false;
   async function frame(): Promise<void> {
-    if (playing && !busy) {
+    if (playing) pending += pacer.take(performance.now(), speed);
+    if (playing && !busy && pending > 0) {
       busy = true;
+      const n = pending;
+      pending = 0;
       try {
-        await source.step(speed);
+        await source.step(n);
       } catch (err) {
         console.error("sim step failed, pausing:", err);
         playing = false;

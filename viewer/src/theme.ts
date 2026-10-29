@@ -7,12 +7,13 @@ export const theme = {
   chute: "#D1980B",
   induction: "#238551",
   /** Colour per robot state: idle, to-induction, loading, to-chute, dropping, failed. */
-  robotState: ["#686C73", "#0090ff", "#8e4ec6", "#F6F7F9", "#f76b15", "#CD4246"],
+  // Loading shares the "heading to pick up" colour and dropping the "carrying" colour: the legend has no internal state names.
+  robotState: ["#686C73", "#0090ff", "#0090ff", "#F6F7F9", "#F6F7F9", "#CD4246"],
   highlight: "#F6F7F9",
   /** Outline drawn around parked/idle robots so they separate from the floor. */
   idleOutline: "#ABB3BF",
   /** Robot state names, index-aligned with robotState (state 0 is idle/parked). */
-  robotStateLabel: ["Parked / idle", "To induction", "Loading", "Carrying", "Dropping", "Failed"],
+  robotStateLabel: ["Parked", "Heading to pick up", "Loading a parcel", "Carrying a parcel", "Dropping a parcel", "Broken down"],
   /** Robot square size as a fraction of a cell. */
   robotScale: 0.6,
   /** Padding around the floor, in CSS pixels. */

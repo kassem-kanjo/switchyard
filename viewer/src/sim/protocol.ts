@@ -37,6 +37,8 @@ export type WorkerResponse =
       tick: number;
       robotXY: Uint16Array;
       robotState: Uint8Array;
+      robotGoalXY: Uint16Array;
+      robotWaited: Uint32Array;
       stats: SimStats;
       /** `MetricsSeries` JSON, attached every few ticks and after a fault is injected. */
       series?: string;
@@ -55,6 +57,8 @@ export interface WasmSimApi {
   tick(): number;
   robot_xy(): Uint16Array;
   robot_state(): Uint8Array;
+  robot_goal_xy(): Uint16Array;
+  robot_waited(): Uint32Array;
   stats_json(): string;
   state_hash_hex(): string;
   metrics_json(): string;

@@ -54,7 +54,13 @@ export class WasmSource implements SimSource {
   async step(n: number): Promise<void> {
     const m = await this.client.request({ type: "step", n });
     if (m.type !== "snapshot") throw new Error("unexpected worker reply");
-    this.snap = { tick: m.tick, robotXY: m.robotXY, robotState: m.robotState };
+    this.snap = {
+      tick: m.tick,
+      robotXY: m.robotXY,
+      robotState: m.robotState,
+      robotGoalXY: m.robotGoalXY,
+      robotWaited: m.robotWaited,
+    };
     this.lastStats = m.stats;
   }
 

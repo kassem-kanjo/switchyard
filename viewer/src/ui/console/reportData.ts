@@ -89,13 +89,13 @@ function faultTimes(sections: ReportSection[]): Map<string, { start?: number; en
 
 /** The short plain phrase for a fix, from the report's wording; falls back to the full label. */
 export function shortFix(label: string): string {
-  let m = /send chute (w+)'s destination to (w+)/i.exec(label);
+  let m = /send chute (\w+)'s destination to (\w+)/i.exec(label);
   if (m) return `Reroute ${m[1]} to ${m[2]}`;
-  m = /clear failed robots.*?within (d+) min/i.exec(label);
+  m = /clear failed robots.*?within (\d+) min/i.exec(label);
   if (m) return `Clear dead robots in ${m[1]} min`;
-  m = /allow (d+) robots inbound per station/i.exec(label);
+  m = /allow (\d+) robots inbound per station/i.exec(label);
   if (m) return `Allow ${m[1]} robots per station`;
-  m = /release (d+) spare robots/i.exec(label);
+  m = /release (\d+) spare robots/i.exec(label);
   if (m) return `Add ${m[1]} spare robots`;
   return capitalise(label);
 }
