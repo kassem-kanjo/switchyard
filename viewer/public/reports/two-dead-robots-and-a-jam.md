@@ -12,11 +12,11 @@ Rerouting C289's parcels to C269 would have saved 83 %.
 ## Summary
 
 From 00:30 sorted throughput fell up to 47 % below the fault-free twin. By 01:02 the incident had cost **6264 parcel-minutes** of delay, and 110 parcels were more than 10 min late.
-Chute C289 jams (F0) explains 70 % ± 3 % (4329 parcel-min); robot R119 breaks down (F2) explains 15 % ± 1 % (947 parcel-min); robot R57 breaks down (F1) explains 15 % ± 2 % (921 parcel-min).
+Chute C289 jams explains 70 % ± 3 % (4329 parcel-min); robot R119 breaks down explains 15 % ± 1 % (947 parcel-min); robot R57 breaks down explains 15 % ± 2 % (921 parcel-min).
 
 Best fix: **send chute C289's destination to C269 from the jam on (never undone)** would have recovered 5162 parcel-min (83 % of the loss).
 
-How we know: the real shift and its fault-free twin, plus replays with each cause removed (R0–R7); see the replay index at the end.
+How we know: the real shift and its fault-free twin, plus replays with each cause removed; the replay index is at the end.
 
 <details>
 <summary><b>Impact</b> — 110 parcels late · peak backlog 596 (twin 91)</summary>
@@ -37,7 +37,7 @@ How we know: the real shift compared with its fault-free twin up to 01:02.
 
 </details>
 
-<details>
+<details open>
 <summary><b>Root causes</b> — 3 causes tested · C289 jam first</summary>
 
 ## Root causes (system conditions)

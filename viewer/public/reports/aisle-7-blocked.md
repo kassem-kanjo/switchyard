@@ -11,9 +11,9 @@ The aisle blockage caused 100 % of the delay.
 ## Summary
 
 From 00:30 sorted throughput fell up to 30 % below the fault-free twin. By 01:01 the incident had cost **2428 parcel-minutes** of delay, and 0 parcels were more than 10 min late.
-Aisle blocked (98 cells) (F0) explains 100 % ± 25 % (2297 parcel-min).
+Aisle blocked (98 cells) explains 100 % ± 25 % (2297 parcel-min).
 
-How we know: the real shift and its fault-free twin, plus replays with each cause removed (R0–R1); see the replay index at the end.
+How we know: the real shift and its fault-free twin, plus replays with each cause removed; the replay index is at the end.
 
 <details>
 <summary><b>Impact</b> — 0 parcels late · peak backlog 261 (twin 91)</summary>
@@ -34,7 +34,7 @@ How we know: the real shift compared with its fault-free twin up to 01:01.
 
 </details>
 
-<details>
+<details open>
 <summary><b>Root causes</b> — 1 cause tested · aisle blockage first</summary>
 
 ## Root causes (system conditions)

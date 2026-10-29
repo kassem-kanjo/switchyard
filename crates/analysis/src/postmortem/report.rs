@@ -1226,7 +1226,8 @@ mod tests {
             "{md}"
         );
         assert_eq!(
-            md.matches("<details>").count(),
+            // Root causes is `<details open>`, the rest plain `<details>`.
+            md.matches("<details").count(),
             md.matches("</details>").count()
         );
         // Every fold names itself on one summary line.

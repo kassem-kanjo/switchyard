@@ -16,11 +16,11 @@ Rerouting C0's parcels to C1 would have saved 71 %.
 ## Summary
 
 From 00:11 sorted throughput fell up to 62 % below the fault-free twin. By 00:37 the incident had cost **837 parcel-minutes** of delay, and 23 parcels were more than 10 min late.
-Chute C0 jams (F0) explains 99 % ± 5 % (827 parcel-min).
+Chute C0 jams explains 99 % ± 5 % (827 parcel-min).
 
 Best fix: **send chute C0's destination to C1 from the jam on (never undone)** would have recovered 595 parcel-min (71 % of the loss).
 
-How we know: the real shift and its fault-free twin, plus replays with each cause removed (R0–R3); see the replay index at the end.
+How we know: the real shift and its fault-free twin, plus replays with each cause removed; the replay index is at the end.
 
 <details>
 <summary><b>Impact</b> — 23 parcels late · peak backlog 115 (twin 30)</summary>
@@ -41,7 +41,7 @@ How we know: the real shift compared with its fault-free twin up to 00:37.
 
 </details>
 
-<details>
+<details open>
 <summary><b>Root causes</b> — 2 causes tested · C0 jam first</summary>
 
 ## Root causes (system conditions)

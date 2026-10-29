@@ -12,11 +12,11 @@ Allowing 8 robots per station would have saved 83 %.
 ## Summary
 
 From 00:30 sorted throughput fell up to 34 % below the fault-free twin. By 01:10 the incident had cost **7734 parcel-minutes** of delay, and 0 parcels were more than 10 min late.
-Volume surge x2.0 at all stations (F0) explains 100 % ± 4 % (7869 parcel-min).
+Volume surge x2.0 at all stations explains 100 % ± 4 % (7869 parcel-min).
 
 Best fix: **allow 8 robots inbound per station (now 6)** would have recovered 6531 parcel-min (83 % of the loss).
 
-How we know: the real shift and its fault-free twin, plus replays with each cause removed (R0–R1); see the replay index at the end.
+How we know: the real shift and its fault-free twin, plus replays with each cause removed; the replay index is at the end.
 
 <details>
 <summary><b>Impact</b> — 0 parcels late · peak backlog 807 (twin 91)</summary>
@@ -37,7 +37,7 @@ How we know: the real shift compared with its fault-free twin up to 01:10.
 
 </details>
 
-<details>
+<details open>
 <summary><b>Root causes</b> — 1 cause tested · volume surge first</summary>
 
 ## Root causes (system conditions)
